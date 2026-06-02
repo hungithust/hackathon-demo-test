@@ -6,18 +6,21 @@ import networkx as nx
 import plotly.graph_objects as go
 import streamlit as st
 
+# Full supply chain: Suppliers → Warehouses → Distribution → Retail → Customers.
 # Fixed layout positions so the graph doesn't jump on each rerun.
 NODES = {
-    "Supplier A": (0, 2), "Supplier B": (0, 1), "Supplier C": (0, 0),
-    "Warehouse North": (1, 1.6), "Warehouse South": (1, 0.4),
-    "Route QL1A": (2, 1.6), "Route DT743": (2, 0.4),
-    "Customers": (3, 1),
+    "Supplier A": (0, 2.4), "Supplier B": (0, 1.2), "Supplier C": (0, 0.0),
+    "Warehouse North": (1, 1.9), "Warehouse South": (1, 0.5),
+    "DC-Central": (2, 1.2),
+    "Store-HCM": (3, 1.9), "Store-HN": (3, 0.5),
+    "Customers": (4, 1.2),
 }
 EDGES = [
     ("Supplier A", "Warehouse North"), ("Supplier B", "Warehouse North"),
     ("Supplier B", "Warehouse South"), ("Supplier C", "Warehouse South"),
-    ("Warehouse North", "Route QL1A"), ("Warehouse South", "Route DT743"),
-    ("Route QL1A", "Customers"), ("Route DT743", "Customers"),
+    ("Warehouse North", "DC-Central"), ("Warehouse South", "DC-Central"),
+    ("DC-Central", "Store-HCM"), ("DC-Central", "Store-HN"),
+    ("Store-HCM", "Customers"), ("Store-HN", "Customers"),
 ]
 
 # Map node label -> (group, key) in session_state.nodes
@@ -25,7 +28,8 @@ LABEL_MAP = {
     "Supplier A": ("suppliers", "A"), "Supplier B": ("suppliers", "B"),
     "Supplier C": ("suppliers", "C"),
     "Warehouse North": ("warehouses", "North"), "Warehouse South": ("warehouses", "South"),
-    "Route QL1A": ("routes", "QL1A"), "Route DT743": ("routes", "DT743"),
+    "DC-Central": ("distribution", "DC-Central"),
+    "Store-HCM": ("retail", "Store-HCM"), "Store-HN": ("retail", "Store-HN"),
 }
 
 
