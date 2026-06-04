@@ -1,0 +1,333 @@
+"""World State — shared contract for all modules (simulator, detection, agent, ui).
+
+Migrated from MOPHONG_Hackathon/ai-fleet-optimizer/world_state_implementation.py
+with spec §6 schema reconciliations applied (see plan header).
+This module imports NOTHING from other fleet modules.
+"""
+
+from dataclasses import dataclass, field, fields, is_dataclass
+from datetime import datetime
+from enum import Enum, IntEnum
+from typing import Dict, List, Optional, Tuple
+
+
+# ============================================================================
+# ENUMS
+# ============================================================================
+
+class VehicleStatus(str, Enum):
+    AT_DEPOT = "at_depot"
+    IN_TRANSIT = "in_transit"
+    ON_ROUTE = "on_route"
+    BROKEN = "broken"
+    MAINTENANCE = "maintenance"
+
+
+class EdgeStatus(str, Enum):
+    OPEN = "open"
+    CONGESTED = "congested"
+    BLOCKED = "blocked"      # forbidden for ALL vehicles
+    FLOODED = "flooded"      # passability depends on flood_level vs wade_capability
+
+
+class EventType(str, Enum):
+    TRAFFIC = "traffic"
+    DEMAND_SURGE = "demand_surge"
+    INVENTORY_SHORTAGE = "inventory_shortage"
+    VEHICLE_BREAKDOWN = "vehicle_breakdown"
+    URGENT_ORDER = "urgent_order"
+    FLOODED_AREA = "flooded_area"
+
+
+class EventSeverity(str, Enum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    CRITICAL = "critical"
+
+
+class DecisionEngine(str, Enum):
+    RULE_BASED = "rule_based"
+    CLAUDE = "claude"
+    HUMAN = "human"
+
+
+class DecisionAction(str, Enum):
+    REROUTE = "reroute"
+    RESCHEDULE = "reschedule"
+    REPRIORITIZE = "reprioritize"
+    REALLOCATE = "reallocate"
+    DEFER = "defer"
+    CANCEL = "cancel"
+    ACCELERATE = "accelerate"
+
+
+class ApprovalStatus(str, Enum):
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    OVERRIDE = "override"
+
+
+class PriorityLevel(IntEnum):
+    """Customer priority. 1 = most urgent, 4 = least urgent (spec §6.1)."""
+    P1 = 1
+    P2 = 2
+    P3 = 3
+    P4 = 4
+
+
+# ============================================================================
+# ENTITIES
+# ============================================================================
+
+@dataclass
+class Location:
+    lat: float
+    lng: float
+    address: str
+    name: str
+
+
+@dataclass
+class TimeWindow:
+    start: datetime
+    end: datetime
+
+    def is_within(self, time: datetime) -> bool:
+        return self.start <= time <= self.end
+
+
+@dataclass
+class Order:
+    sku: str
+    qty: int
+    weight_kg: float = 1.0
+
+
+@dataclass
+class CustomerProfile:
+    id: str
+    type: str
+    location: Location
+    orders: Dict[str, int]
+    time_window: TimeWindow
+    priority: int = 4              # 1 = most urgent .. 4 = least urgent (see PriorityLevel)
+    sla_deadline: Optional[datetime] = None
+    contact_name: str = ""
+    contact_phone: str = ""
+    notes: str = ""
+
+
+@dataclass
+class Stop:
+    customer_id: str
+    sequence: int
+    planned_arrival: datetime
+    planned_departure: datetime
+    actual_arrival: Optional[datetime] = None
+    actual_departure: Optional[datetime] = None
+    load_after_stop: float = 0.0
+
+
+@dataclass
+class VehicleRoute:
+    vehicle_id: str
+    stops: List[Stop]
+    total_distance: float = 0.0
+    total_time: float = 0.0
+    start_time: Optional[datetime] = None
+    end_time: Optional[datetime] = None
+
+
+@dataclass
+class Vehicle:
+    id: str
+    capacity_kg: float
+    pos: Location
+    current_load_kg: float
+    status: VehicleStatus = VehicleStatus.AT_DEPOT
+    route: Optional[VehicleRoute] = None
+    shift_start: Optional[datetime] = None
+    shift_end: Optional[datetime] = None
+    current_stop_index: int = -1
+    mileage_km: float = 0.0
+    fuel_level: float = 100.0
+    veh_type: str = "truck"        # groups vehicles by wade_capability (spec §6.5)
+    wade_capability: float = 0.3   # max flood depth (m) this vehicle can wade
+
+
+@dataclass
+class Depot:
+    location: Location
+    inventory: Dict[str, int]
+    opening_time: datetime
+    closing_time: datetime
+    vehicles: List[Vehicle] = field(default_factory=list)
+
+
+@dataclass
+class RoadNode:
+    id: str
+    location: Location
+
+
+@dataclass
+class RoadEdge:
+    from_node: str
+    to_node: str
+    distance_km: float
+    base_time_minutes: float
+    traffic_factor: float = 1.0
+    status: EdgeStatus = EdgeStatus.OPEN
+    flood_level: float = 0.0       # flood depth (m); compared to Vehicle.wade_capability
+
+    @property
+    def effective_time(self) -> float:
+        return self.base_time_minutes * self.traffic_factor
+
+    def is_passable(self, wade_capability: float) -> bool:
+        """Spec §6.5: BLOCKED forbidden for all; otherwise flooded edge is
+        forbidden when its flood_level exceeds the vehicle's wade_capability."""
+        if self.status == EdgeStatus.BLOCKED:
+            return False
+        return self.flood_level <= wade_capability
+
+
+@dataclass
+class RoadGraph:
+    nodes: Dict[str, RoadNode]
+    edges: Dict[Tuple[str, str], RoadEdge]
+    adjacency: Dict[str, List[str]] = field(default_factory=dict)
+
+
+@dataclass
+class Event:
+    id: str
+    event_type: EventType
+    target: str
+    severity: EventSeverity
+    started_at: datetime
+    description: str = ""
+    metrics: Dict[str, float] = field(default_factory=dict)
+    ended_at: Optional[datetime] = None   # spec §6.9: event resolved when set
+
+
+@dataclass
+class Decision:
+    id: str
+    timestamp: datetime
+    event_id: Optional[str]
+    action: DecisionAction
+    engine: DecisionEngine
+    description: str
+    impact_estimate: Dict[str, float] = field(default_factory=dict)
+    approval_status: ApprovalStatus = ApprovalStatus.PENDING
+    approved_by: Optional[str] = None
+    approved_at: Optional[datetime] = None
+    executed_at: Optional[datetime] = None
+    execution_result: Optional[Dict] = None
+    reasoning: str = ""
+
+
+@dataclass
+class WorldState:
+    """Single in-memory source of truth. Snapshot to JSON via to_dict/from_dict."""
+
+    clock: datetime
+    depot: Depot
+    customers: Dict[str, CustomerProfile] = field(default_factory=dict)
+    vehicles: Dict[str, Vehicle] = field(default_factory=dict)
+    road_graph: RoadGraph = field(
+        default_factory=lambda: RoadGraph(nodes={}, edges={}, adjacency={}))
+    plan: Dict[str, VehicleRoute] = field(default_factory=dict)
+    events: List[Event] = field(default_factory=list)
+    events_archive: List[Event] = field(default_factory=list)
+    decisions: List[Decision] = field(default_factory=list)
+    version: str = "2.0"
+    sim_tick: int = 0
+
+    # ----- helpers -----
+    def get_customer(self, customer_id: str) -> Optional[CustomerProfile]:
+        return self.customers.get(customer_id)
+
+    def get_vehicle(self, vehicle_id: str) -> Optional[Vehicle]:
+        return self.vehicles.get(vehicle_id)
+
+    def get_route(self, vehicle_id: str) -> Optional[VehicleRoute]:
+        return self.plan.get(vehicle_id)
+
+    def get_active_events(self) -> List[Event]:
+        return [e for e in self.events if e.ended_at is None]
+
+    def get_pending_decisions(self) -> List[Decision]:
+        return [d for d in self.decisions
+                if d.approval_status == ApprovalStatus.PENDING]
+
+    def get_approved_decisions(self) -> List[Decision]:
+        return [d for d in self.decisions
+                if d.approval_status == ApprovalStatus.APPROVED]
+
+    def total_orders_pending(self) -> int:
+        return sum(sum(c.orders.values()) for c in self.customers.values())
+
+    def to_dict(self) -> dict:
+        return _encode(self)
+
+    @staticmethod
+    def from_dict(data: dict) -> "WorldState":
+        return _decode(data)
+
+
+# ============================================================================
+# SERIALIZATION (self-describing, generic; spec §6.10)
+# ============================================================================
+
+def _encode(obj):
+    if obj is None or isinstance(obj, (str, int, float, bool)):
+        return obj
+    if isinstance(obj, Enum):
+        return {"__enum__": type(obj).__name__, "value": obj.value}
+    if isinstance(obj, datetime):
+        return {"__dt__": obj.isoformat()}
+    if isinstance(obj, dict):
+        if obj and all(isinstance(k, tuple) for k in obj):  # RoadGraph.edges
+            return {"__tuplekeys__": [[list(k), _encode(v)] for k, v in obj.items()]}
+        return {k: _encode(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_encode(v) for v in obj]
+    if is_dataclass(obj):
+        out = {"__type__": type(obj).__name__}
+        for f in fields(obj):
+            out[f.name] = _encode(getattr(obj, f.name))
+        return out
+    raise TypeError(f"Cannot encode {type(obj)!r}")
+
+
+def _decode(obj):
+    if isinstance(obj, list):
+        return [_decode(v) for v in obj]
+    if isinstance(obj, dict):
+        if "__dt__" in obj:
+            return datetime.fromisoformat(obj["__dt__"])
+        if "__enum__" in obj:
+            return _ENUM_REGISTRY[obj["__enum__"]](obj["value"])
+        if "__tuplekeys__" in obj:
+            return {tuple(k): _decode(v) for k, v in obj["__tuplekeys__"]}
+        if "__type__" in obj:
+            cls = _DATACLASS_REGISTRY[obj["__type__"]]
+            kwargs = {k: _decode(v) for k, v in obj.items() if k != "__type__"}
+            return cls(**kwargs)
+        return {k: _decode(v) for k, v in obj.items()}
+    return obj
+
+
+_DATACLASS_REGISTRY = {c.__name__: c for c in [
+    Location, TimeWindow, Order, CustomerProfile, Stop, VehicleRoute,
+    Vehicle, Depot, RoadNode, RoadEdge, RoadGraph, Event, Decision, WorldState,
+]}
+
+_ENUM_REGISTRY = {c.__name__: c for c in [
+    VehicleStatus, EdgeStatus, EventType, EventSeverity, DecisionEngine,
+    DecisionAction, ApprovalStatus, PriorityLevel,
+]}
