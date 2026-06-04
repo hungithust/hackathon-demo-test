@@ -1,6 +1,1 @@
-streamlit>=1.37
-anthropic>=0.39
-networkx>=3.0
-plotly>=5.20
-pandas>=2.0
-numpy>=1.26
+pytest>=7.4

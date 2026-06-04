@@ -12,3 +12,9 @@ venv/
 .DS_Store
 .idea/
 .vscode/
+
+# pytest / runtime artifacts
+.pytest_cache/
+snapshots/
+
+DEMO_GUIDE.txt
