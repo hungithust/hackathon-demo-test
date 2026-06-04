@@ -223,6 +223,10 @@ code teammate hiện tại.**
 - Xe BROKEN → **người sửa** (không tự lành).
 - Hết ca → xe **phải quay về depot**.
 - Graph **directed**, cho phép **multiple edges** A→B; depot & customer **là RoadNode**.
+  - **(Chốt 2026-06-05) Biểu diễn multiple edges**: `RoadGraph.edges` key theo `edge_id`
+    (không phải `(from,to)`); mỗi `RoadEdge` có `id` (tự suy ra `"{from}->{to}"`, parallel
+    thì id tường minh vd `"DEPOT->C001#2"`); `adjacency[node] = [edge_id outgoing]`; helper
+    `out_edges/edges_between/get_edge`. Xem `docs/superpowers/plans/2026-06-05-roadgraph-multiple-edges.md`.
 - Route **bắt đầu/kết thúc tại depot** (circular); có **service_time** tại mỗi điểm.
 
 ### 6.10. Snapshot/persistence
