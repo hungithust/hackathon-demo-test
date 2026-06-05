@@ -72,3 +72,54 @@ def test_deterministic_ids_no_duplicates():
     ev2 = RuleDetector(load_settings()).detect(s)
     assert [e.id for e in ev1] == [e.id for e in ev2]   # stable across calls
     assert len({e.id for e in ev1}) == len(ev1)         # unique within a call
+
+
+from fleet.detection.zscore import ZScoreDetector
+from fleet.contracts.state import CustomerProfile, TimeWindow
+
+
+def _add_customer(state, cid, units):
+    state.customers[cid] = CustomerProfile(
+        id=cid, type="market", location=Location(0.0, 0.0, "", ""),
+        orders={"SKUX": units},
+        time_window=TimeWindow(state.depot.opening_time,
+                               state.depot.closing_time))
+
+
+def test_outlier_customer_flagged_as_demand_surge():
+    s = _bare_state()
+    # enough baseline customers that the outlier's population-std z-score >= 3
+    for i in range(10):
+        _add_customer(s, f"C{i:03d}", 10)
+    _add_customer(s, "C999", 200)        # extreme outlier
+    events = ZScoreDetector(load_settings()).detect(s)
+    targets = {e.target for e in events}
+    assert "C999" in targets
+    e = next(ev for ev in events if ev.target == "C999")
+    assert e.event_type == EventType.DEMAND_SURGE
+    assert e.severity == EventSeverity.HIGH       # z well above 3
+    assert e.metrics["units"] == 200.0
+
+
+def test_uniform_demand_emits_nothing():
+    s = _bare_state()
+    for cid in ("C001", "C002", "C003"):
+        _add_customer(s, cid, 10)
+    assert ZScoreDetector(load_settings()).detect(s) == []
+
+
+def test_fewer_than_two_customers_emits_nothing():
+    s = _bare_state()
+    _add_customer(s, "C001", 50)
+    assert ZScoreDetector(load_settings()).detect(s) == []
+
+
+def test_threshold_is_configurable():
+    s = _bare_state()
+    for cid, u in (("C001", 10), ("C002", 10), ("C003", 10), ("C004", 22)):
+        _add_customer(s, cid, u)
+    # with a high cutoff, the mild outlier is ignored
+    assert ZScoreDetector(load_settings(env={"ZSCORE_THRESHOLD": "5"})).detect(s) == []
+    # with a low cutoff, it is flagged
+    flagged = ZScoreDetector(load_settings(env={"ZSCORE_THRESHOLD": "1.2"})).detect(s)
+    assert any(e.target == "C004" for e in flagged)
