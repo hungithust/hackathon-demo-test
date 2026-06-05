@@ -60,3 +60,13 @@ def test_get_active_events_filters_ended():
     state.events.extend([live, done])
     active = state.get_active_events()
     assert [e.id for e in active] == ["E1"]
+
+
+def test_roadedge_id_auto_derives_from_endpoints():
+    e = RoadEdge("DEPOT", "C001", 2.0, 10.0)
+    assert e.id == "DEPOT->C001"
+
+
+def test_roadedge_explicit_id_is_preserved():
+    e = RoadEdge("DEPOT", "C001", 1.2, 6.0, id="DEPOT->C001#2")
+    assert e.id == "DEPOT->C001#2"

@@ -181,6 +181,11 @@ class RoadEdge:
     traffic_factor: float = 1.0
     status: EdgeStatus = EdgeStatus.OPEN
     flood_level: float = 0.0       # flood depth (m); compared to Vehicle.wade_capability
+    id: str = ""                   # unique edge id; auto-derived from endpoints if empty
+
+    def __post_init__(self):
+        if not self.id:
+            self.id = f"{self.from_node}->{self.to_node}"
 
     @property
     def effective_time(self) -> float:
