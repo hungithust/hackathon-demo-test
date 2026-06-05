@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 
 from fleet.contracts.state import (
     WorldState, Depot, Location, Vehicle, VehicleStatus, CustomerProfile,
-    TimeWindow, RoadGraph, RoadNode, RoadEdge,
+    TimeWindow, RoadGraph, RoadNode, RoadEdge, EdgeStatus,
 )
 
 
@@ -74,6 +74,14 @@ def build_sample_state(base_time: datetime = datetime(2026, 6, 4, 6, 0)) -> Worl
     for a, b, km, mins in edge_list:
         _add_edge(a, b, km, mins)
         _add_edge(b, a, km, mins)
+
+    # A second, shorter DEPOT<->C001 route that floods in the rainy season:
+    # a realistic parallel edge (spec §6.9). Standard trucks (wade 0.3 m) cannot
+    # use it while flooded — this is exactly what M3's per-veh_type matrix exploits.
+    _add_edge("DEPOT", "C001", 1.2, 6.0, id="DEPOT->C001#2",
+              status=EdgeStatus.FLOODED, flood_level=0.5)
+    _add_edge("C001", "DEPOT", 1.2, 6.0, id="C001->DEPOT#2",
+              status=EdgeStatus.FLOODED, flood_level=0.5)
 
     return WorldState(
         clock=base_time,

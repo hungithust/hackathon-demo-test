@@ -31,3 +31,14 @@ def test_sample_graph_nodes_match_entities():
 def test_sample_round_trips():
     s = build_sample_state()
     assert WorldState.from_dict(s.to_dict()).to_dict() == s.to_dict()
+
+
+def test_sample_has_parallel_edges_depot_to_c001():
+    s = build_sample_state()
+    parallels = s.road_graph.edges_between("DEPOT", "C001")
+    assert len(parallels) == 2
+    assert {e.id for e in parallels} == {"DEPOT->C001", "DEPOT->C001#2"}
+    # the shortcut floods deeper than a standard truck (wade 0.3 m) can pass
+    shortcut = s.road_graph.get_edge("DEPOT->C001#2")
+    assert shortcut.is_passable(0.3) is False
+    assert shortcut.is_passable(0.6) is True
