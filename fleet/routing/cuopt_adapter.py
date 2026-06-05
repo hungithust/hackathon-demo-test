@@ -118,3 +118,55 @@ def from_cuopt_response(problem: RoutingProblem, response: dict,
                "solution_cost": float(sr.get("solution_cost", 0.0))}
     return RoutingSolution(routes=routes, dropped=dropped,
                            feasible=(status == _STATUS_OK), metrics=metrics)
+
+
+class CuOptAdapter:
+    """RouteOptimizer backed by an NVIDIA cuOpt server.
+
+    `transport(request_dict) -> response_dict` is injected so the solve path is
+    testable offline. When omitted, a lazy default transport is built from
+    `settings.cuopt_endpoint` on first use (requires the optional
+    `cuopt-sh-client` package and a running cuOpt server / GPU)."""
+
+    def __init__(self, settings=None,
+                 transport: Callable[[dict], dict] = None):
+        self.settings = settings
+        self._transport = transport
+
+    def solve(self, problem: RoutingProblem) -> RoutingSolution:
+        if not problem.tasks or not problem.fleet:
+            return RoutingSolution(
+                routes={f.id: [] for f in problem.fleet},
+                dropped=[t.customer_id for t in problem.tasks],
+                feasible=True, metrics={"total_time_min": 0.0})
+
+        base = _base_time(problem)
+        request = to_cuopt_request(problem)
+        response = self._get_transport()(request)
+        return from_cuopt_response(problem, response, base)
+
+    def _get_transport(self) -> Callable[[dict], dict]:
+        if self._transport is None:
+            self._transport = self._build_default_transport()
+        return self._transport
+
+    def _build_default_transport(self) -> Callable[[dict], dict]:
+        """Lazily build the real cuOpt transport from settings. Imported here so
+        the dependency is optional and tests never touch the network."""
+        endpoint = getattr(self.settings, "cuopt_endpoint", "") or ""
+        if not endpoint:
+            raise RuntimeError(
+                "CuOptAdapter has no transport and settings.cuopt_endpoint is "
+                "empty; configure a cuOpt server or inject a transport.")
+
+        from cuopt_sh_client import CuOptServiceSelfHostClient  # optional dep
+
+        # endpoint formatted as "host:port" (e.g. "localhost:5000")
+        host, _, port = endpoint.partition(":")
+        client = CuOptServiceSelfHostClient(ip=host or "localhost",
+                                            port=int(port or "5000"))
+
+        def transport(request: dict) -> dict:
+            return client.get_optimized_routes(request)
+
+        return transport

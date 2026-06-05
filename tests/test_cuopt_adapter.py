@@ -145,3 +145,37 @@ def test_nonzero_status_is_infeasible():
     resp["response"]["solver_response"]["status"] = 1
     sol = from_cuopt_response(p, resp, base)
     assert sol.feasible is False
+
+
+from fleet.routing.cuopt_adapter import CuOptAdapter
+
+
+def test_solve_uses_transport_and_returns_solution():
+    p = _problem()
+    captured = {}
+
+    def fake_transport(request: dict) -> dict:
+        captured["request"] = request
+        return _canned_response()
+
+    adapter = CuOptAdapter(settings=None, transport=fake_transport)
+    sol = adapter.solve(p)
+
+    # the transport received a well-formed cuOpt request
+    assert captured["request"]["task_data"]["task_locations"] == [1, 2]
+    # and the response was translated
+    assert [s.customer_id for s in sol.routes["V001"]] == ["C001", "C002"]
+    assert sol.feasible is True
+
+
+def test_solve_short_circuits_empty_problem_without_calling_transport():
+    p = RoutingProblem(locations=["DEPOT"], depot_id="DEPOT",
+                       time_matrix={"truck": [[0.0]]}, fleet=[], tasks=[])
+    calls = []
+    adapter = CuOptAdapter(settings=None,
+                           transport=lambda r: calls.append(r) or {})
+    sol = adapter.solve(p)
+    assert calls == []                 # no network when there's nothing to solve
+    assert sol.routes == {}
+    assert sol.dropped == []
+    assert sol.feasible is True
