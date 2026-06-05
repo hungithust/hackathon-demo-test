@@ -1,2 +1,6 @@
 pytest>=7.4
 ortools>=9.8
+# Optional (M4, GPU): NVIDIA cuOpt self-hosted thin client. Only needed when
+# ROUTING_ENGINE=cuopt with a live cuOpt server. The CPU solver (ortools) is the
+# default and the test suite never imports this.
+# cuopt-sh-client
