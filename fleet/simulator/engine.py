@@ -10,7 +10,7 @@ from datetime import timedelta
 from typing import Dict
 
 from fleet.contracts.state import (
-    WorldState, Event, EventType, EventSeverity,
+    WorldState, Event, EventType, EventSeverity, VehicleStatus, Vehicle,
 )
 
 
@@ -58,6 +58,7 @@ class WorldSimulator:
         self._generate_demand(state)
         self._maybe_restock(state)
         self._update_shortage_events(state)
+        self._advance_vehicles(state)
 
     def inject_event(self, state: WorldState, event_type: EventType,
                      target: str, severity: EventSeverity) -> Event:
@@ -122,6 +123,44 @@ class WorldSimulator:
                     ))
             elif sku in active:
                 active[sku].ended_at = state.clock
+
+    def _advance_vehicles(self, state: WorldState) -> None:
+        """Schedule-driven movement: visit every stop whose planned arrival has
+        passed, delivering on arrival; return to depot once the shift is over."""
+        for vid, route in state.plan.items():
+            vehicle = state.vehicles.get(vid)
+            if vehicle is None or vehicle.status in (
+                    VehicleStatus.BROKEN, VehicleStatus.MAINTENANCE):
+                continue
+            for stop in route.stops:
+                if stop.actual_arrival is None and stop.planned_arrival <= state.clock:
+                    stop.actual_arrival = state.clock
+                    stop.actual_departure = state.clock
+                    cust = state.customers.get(stop.customer_id)
+                    if cust is not None:
+                        vehicle.pos = cust.location
+                    vehicle.current_stop_index = stop.sequence
+                    vehicle.status = VehicleStatus.ON_ROUTE
+                    self._deliver(state, vehicle, stop.customer_id)
+            all_visited = route.stops and all(
+                s.actual_arrival is not None for s in route.stops)
+            shift_done = route.end_time is None or state.clock >= route.end_time
+            if all_visited and shift_done:
+                vehicle.status = VehicleStatus.AT_DEPOT
+                vehicle.pos = state.depot.location
+                vehicle.current_stop_index = -1
+
+    def _deliver(self, state: WorldState, vehicle: "Vehicle",
+                 customer_id: str) -> None:
+        """Satisfy a customer's outstanding order: draw down depot stock (floored
+        at 0) and clear the order."""
+        cust = state.customers.get(customer_id)
+        if cust is None:
+            return
+        for sku, qty in cust.orders.items():
+            on_hand = state.depot.inventory.get(sku, 0)
+            state.depot.inventory[sku] = max(0, on_hand - qty)
+        cust.orders = {}
 
     @staticmethod
     def _shortage_severity(demand: int, stock: int) -> EventSeverity:
