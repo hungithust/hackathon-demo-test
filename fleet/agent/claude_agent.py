@@ -67,3 +67,17 @@ def build_messages(state: WorldState, event: Event) -> Tuple[str, str]:
         "Choose the single best dispatch action and estimate added delay (minutes)."
     )
     return _SYSTEM, user
+
+
+def parse_decision(data: dict, event: Event, seq: int, clock) -> Decision:
+    """Map one model JSON object to a Decision. Raises ValueError if `action`
+    is not a valid DecisionAction value (caller decides how to recover)."""
+    action = DecisionAction(data["action"])   # raises ValueError on unknown
+    added_delay = float(data.get("added_delay_min", _DEFAULT_ADDED_DELAY_MIN))
+    return Decision(
+        id=f"DEC_{seq:03d}", timestamp=clock, event_id=event.id,
+        action=action, engine=DecisionEngine.CLAUDE,
+        description=f"[claude] respond to {event.event_type.value} on {event.target}",
+        impact_estimate={"added_delay_min": added_delay},
+        reasoning=str(data.get("reasoning", "")),
+    )
