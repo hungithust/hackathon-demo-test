@@ -65,3 +65,28 @@ class SimulationController:
                 for d in s.get_pending_decisions()
             ],
         }
+
+    # ----- human-in-the-loop approval -----
+    def approve(self, decision_id: str):
+        d = self._find_pending(decision_id)
+        d.approval_status = ApprovalStatus.APPROVED
+        d.approved_by = "human"
+        d.approved_at = self.state.clock
+        self.components.dispatcher.apply(self.state, d)
+        if (d.action == DecisionAction.REROUTE
+                and self.state.total_orders_pending() > 0):
+            reroute(self.state, self.components.optimizer)
+        return d
+
+    def reject(self, decision_id: str):
+        d = self._find_pending(decision_id)
+        d.approval_status = ApprovalStatus.REJECTED
+        d.approved_by = "human"
+        d.approved_at = self.state.clock
+        return d
+
+    def _find_pending(self, decision_id: str):
+        for d in self.state.get_pending_decisions():
+            if d.id == decision_id:
+                return d
+        raise KeyError(f"no pending decision with id {decision_id!r}")
