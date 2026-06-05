@@ -73,3 +73,75 @@ def test_unreachable_cell_becomes_forbidden_constant():
     p.time_matrix["truck"][0][2] = float("inf")
     req = to_cuopt_request(p)
     assert req["cost_matrix_data"]["data"]["0"][0][2] == 10_000_000
+
+
+from datetime import timedelta
+from fleet.routing.cuopt_adapter import from_cuopt_response, _base_time
+
+
+def _canned_response():
+    # V001 (vehicle idx 0) serves task 0 (C001) then task 1 (C002); none dropped.
+    # arrival_stamp in minutes from base; "Depot" entries bracket the route.
+    return {
+        "response": {
+            "solver_response": {
+                "status": 0,
+                "num_vehicles": 1,
+                "solution_cost": 35.0,
+                "vehicle_data": {
+                    "0": {
+                        "task_id": ["Depot", "0", "1", "Depot"],
+                        "route": [0, 1, 2, 0],
+                        "arrival_stamp": [0.0, 70.0, 130.0, 150.0],
+                    }
+                },
+                "dropped_tasks": {"task_id": [], "task_index": []},
+            }
+        },
+        "reqId": "test-req",
+    }
+
+
+def test_response_maps_to_routing_solution():
+    p = _problem()
+    base = _base_time(p)
+    sol = from_cuopt_response(p, _canned_response(), base)
+
+    assert sol.feasible is True
+    assert sol.dropped == []
+    stops = sol.routes["V001"]
+    assert [s.customer_id for s in stops] == ["C001", "C002"]
+    # arrival = base + arrival_stamp minutes
+    assert stops[0].arrival == base + timedelta(minutes=70)
+    # departure = arrival + service_time (10 min)
+    assert stops[0].departure == base + timedelta(minutes=80)
+    # V002 had no vehicle_data -> empty route
+    assert sol.routes["V002"] == []
+    # load_after: total demand 100 -> after C001 (40) leaves 60, after C002 leaves 0
+    assert stops[0].load_after == 60.0
+    assert stops[1].load_after == 0.0
+
+
+def test_dropped_tasks_become_dropped_customer_ids():
+    p = _problem()
+    base = _base_time(p)
+    resp = _canned_response()
+    sr = resp["response"]["solver_response"]
+    sr["vehicle_data"]["0"] = {
+        "task_id": ["Depot", "0", "Depot"],
+        "route": [0, 1, 0],
+        "arrival_stamp": [0.0, 70.0, 90.0],
+    }
+    sr["dropped_tasks"] = {"task_id": ["1"], "task_index": [1]}
+    sol = from_cuopt_response(p, resp, base)
+    assert sol.dropped == ["C002"]
+    assert [s.customer_id for s in sol.routes["V001"]] == ["C001"]
+
+
+def test_nonzero_status_is_infeasible():
+    p = _problem()
+    base = _base_time(p)
+    resp = _canned_response()
+    resp["response"]["solver_response"]["status"] = 1
+    sol = from_cuopt_response(p, resp, base)
+    assert sol.feasible is False

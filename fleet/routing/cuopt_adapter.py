@@ -79,3 +79,42 @@ def to_cuopt_request(problem: RoutingProblem) -> dict:
             "vehicle_types": veh_types,
         },
     }
+
+
+def from_cuopt_response(problem: RoutingProblem, response: dict,
+                        base: datetime) -> RoutingSolution:
+    sr = response["response"]["solver_response"]
+    status = sr.get("status", 0)
+
+    routes: Dict[str, List[SolvedStop]] = {f.id: [] for f in problem.fleet}
+    total_time = 0.0
+    for v_key, vd in sr.get("vehicle_data", {}).items():
+        vehicle = problem.fleet[int(v_key)]
+        task_ids = vd.get("task_id", [])
+        stamps = vd.get("arrival_stamp", [])
+        served = [(tid, st) for tid, st in zip(task_ids, stamps)
+                  if tid != "Depot"]
+        remaining = sum(int(round(problem.tasks[int(tid)].demand_kg))
+                        for tid, _ in served)
+        stops: List[SolvedStop] = []
+        for tid, stamp in served:
+            task = problem.tasks[int(tid)]
+            arrival = base + timedelta(minutes=float(stamp))
+            departure = arrival + timedelta(minutes=task.service_time_min)
+            remaining -= int(round(task.demand_kg))
+            stops.append(SolvedStop(
+                customer_id=task.customer_id, arrival=arrival,
+                departure=departure, load_after=float(remaining)))
+        routes[vehicle.id] = stops
+        if stamps:
+            total_time += float(stamps[-1]) - float(stamps[0])
+
+    dropped_idx = sr.get("dropped_tasks", {}).get("task_index", [])
+    dropped = [problem.tasks[i].customer_id for i in dropped_idx]
+
+    served_count = sum(len(s) for s in routes.values())
+    metrics = {"total_time_min": float(total_time),
+               "served": float(served_count), "dropped": float(len(dropped)),
+               "solution_cost": float(sr.get("solution_cost", 0.0))}
+    return RoutingSolution(routes=routes, dropped=dropped,
+                           feasible=(status == _STATUS_OK), metrics=metrics)
