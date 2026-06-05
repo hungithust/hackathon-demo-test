@@ -8,7 +8,10 @@ outgoing edges keeps the minimum. Pure + deterministic; no solver here."""
 import heapq
 from typing import Dict, List
 
-from fleet.contracts.state import RoadGraph
+from fleet.contracts.state import RoadGraph, WorldState
+from fleet.contracts.dto import RoutingProblem, FleetVehicleSpec, TaskSpec
+
+DEFAULT_SERVICE_TIME_MIN = 10.0   # per-stop service time (no per-customer field yet)
 
 INF = float("inf")
 
@@ -48,3 +51,50 @@ def build_time_matrix(graph: RoadGraph, locations: List[str],
             if loc in pos:
                 matrix[i][pos[loc]] = t
     return matrix
+
+
+def build_routing_problem(state: WorldState,
+                          depot_id: str = "DEPOT") -> RoutingProblem:
+    """Assemble a solver-ready RoutingProblem from the current world.
+
+    - locations: depot first, then customers that still have pending orders.
+    - time_matrix: one N×N matrix per veh_type, using the minimum wade_capability
+      among that type's vehicles (conservative: passable by every such vehicle).
+    - fleet: one FleetVehicleSpec per vehicle (shift falls back to depot hours).
+    - tasks: one TaskSpec per pending customer (demand_kg = total order units).
+    """
+    pending = [cid for cid in sorted(state.customers)
+               if sum(state.customers[cid].orders.values()) > 0]
+    locations = [depot_id] + pending
+
+    by_type: Dict[str, list] = {}
+    for v in state.vehicles.values():
+        by_type.setdefault(v.veh_type, []).append(v)
+    time_matrix = {
+        vt: build_time_matrix(state.road_graph, locations,
+                              min(v.wade_capability for v in vs))
+        for vt, vs in by_type.items()
+    }
+
+    fleet = [
+        FleetVehicleSpec(
+            id=v.id, capacity_kg=v.capacity_kg, veh_type=v.veh_type,
+            shift_start=v.shift_start or state.depot.opening_time,
+            shift_end=v.shift_end or state.depot.closing_time,
+        )
+        for v in state.vehicles.values()
+    ]
+
+    tasks = []
+    for cid in pending:
+        c = state.customers[cid]
+        tasks.append(TaskSpec(
+            customer_id=cid,
+            demand_kg=float(sum(c.orders.values())),
+            tw_start=c.time_window.start, tw_end=c.time_window.end,
+            service_time_min=DEFAULT_SERVICE_TIME_MIN,
+            priority=c.priority,
+        ))
+
+    return RoutingProblem(locations=locations, depot_id=depot_id,
+                          time_matrix=time_matrix, fleet=fleet, tasks=tasks)
