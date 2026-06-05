@@ -56,8 +56,19 @@ def test_critical_event_is_queued_not_executed():
     assert d in s.get_pending_decisions()
 
 
+def _heal_sample_floods(s):
+    # The sample world ships parallel flooded DEPOT<->C001 links; with the real
+    # RuleDetector they surface FLOODED_AREA every tick -> perpetual REROUTE that
+    # resets the plan. Heal them so these tests can observe vehicle progress.
+    for eid in ("DEPOT->C001#2", "C001->DEPOT#2"):
+        if eid in s.road_graph.edges:
+            s.road_graph.edges[eid].status = EdgeStatus.OPEN
+            s.road_graph.edges[eid].flood_level = 0.0
+
+
 def test_loop_world_comes_alive_over_many_ticks():
     s = build_sample_state()
+    _heal_sample_floods(s)
     settings = load_settings(env={"TICK_MINUTES": "30",
                                   "RESTOCK_INTERVAL_MIN": "100000"})
     comps = build_components(settings)
@@ -71,6 +82,7 @@ def test_loop_world_comes_alive_over_many_ticks():
 
 def test_loop_plans_and_moves_vehicles():
     s = build_sample_state()
+    _heal_sample_floods(s)
     # seed a concrete order so there is something to plan + deliver
     s.customers["C001"].orders = {"SKUX": 20}
     s.depot.inventory["SKUX"] = 200
