@@ -9,6 +9,7 @@ from fleet.contracts.interfaces import (
 )
 from fleet.simulator.engine import WorldSimulator
 from fleet.detection.rules import RuleDetector
+from fleet.detection.zscore import ZScoreDetector
 from fleet.routing.cpu_solver import CpuSolver
 from fleet.routing.cuopt_adapter import CuOptAdapter
 from fleet.forecast.ewma import EwmaForecaster
@@ -44,11 +45,18 @@ def build_components(settings) -> Components:
     else:
         decision_engine = RuleBasedEngine()
 
+    # Detector: statistical z-score anomaly detector when requested, else the
+    # rule-based threshold detector (default).
+    if settings.detector_engine == "zscore":
+        detector: Detector = ZScoreDetector(settings)
+    else:
+        detector = RuleDetector(settings)
+
     return Components(
         simulator=WorldSimulator(settings),
-        detector=RuleDetector(),
+        detector=detector,
         optimizer=optimizer,
-        forecaster=EwmaForecaster(),
+        forecaster=EwmaForecaster(settings),   # prophet not yet implemented (M6)
         decision_engine=decision_engine,
         dispatcher=DispatcherImpl(),
     )

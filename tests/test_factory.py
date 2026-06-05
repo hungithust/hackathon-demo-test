@@ -6,6 +6,8 @@ from fleet.routing.cpu_solver import CpuSolver
 from fleet.routing.cuopt_adapter import CuOptAdapter
 from fleet.agent.rule_based import RuleBasedEngine
 from fleet.agent.claude_agent import ClaudeAgent
+from fleet.detection.rules import RuleDetector
+from fleet.detection.zscore import ZScoreDetector
 from config.settings import load_settings
 
 
@@ -51,3 +53,13 @@ def test_claude_engine_without_key_falls_back_to_rule():
                            "ANTHROPIC_API_KEY": ""})
     comps = build_components(s)
     assert isinstance(comps.decision_engine, RuleBasedEngine)
+
+
+def test_default_detector_is_rule():
+    comps = build_components(load_settings(env={}))
+    assert isinstance(comps.detector, RuleDetector)
+
+
+def test_zscore_detector_selected_by_setting():
+    comps = build_components(load_settings(env={"DETECTOR_ENGINE": "zscore"}))
+    assert isinstance(comps.detector, ZScoreDetector)
