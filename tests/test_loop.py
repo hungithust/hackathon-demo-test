@@ -58,7 +58,23 @@ def test_loop_world_comes_alive_over_many_ticks():
     settings = load_settings(env={"TICK_MINUTES": "30",
                                   "RESTOCK_INTERVAL_MIN": "100000"})
     comps = build_components(settings)
-    before = s.total_orders_pending()
     run_loop(s, comps, n_ticks=20, settings=settings, logger=_silent)
     assert s.sim_tick == 20
-    assert s.total_orders_pending() > before          # demand accrued over the run
+    # the loop planned routes and at least one stop was actually visited
+    assert s.plan
+    assert any(st.actual_arrival is not None
+               for r in s.plan.values() for st in r.stops)
+
+
+def test_loop_plans_and_moves_vehicles():
+    s = build_sample_state()
+    # seed a concrete order so there is something to plan + deliver
+    s.customers["C001"].orders = {"SKUX": 20}
+    s.depot.inventory["SKUX"] = 200
+    settings = load_settings(env={"TICK_MINUTES": "15"})
+    comps = build_components(settings)
+    run_loop(s, comps, n_ticks=8, settings=settings, logger=_silent)
+    assert s.plan                                   # initial plan was built
+    visited = [st for r in s.plan.values() for st in r.stops
+               if st.actual_arrival is not None]
+    assert visited                                  # at least one delivery happened

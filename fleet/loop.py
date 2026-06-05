@@ -9,10 +9,13 @@ from typing import Callable
 from fleet.contracts.state import WorldState, ApprovalStatus
 from fleet.factory import Components
 from fleet.dispatch.approval import should_auto_approve
+from fleet.routing.planner import plan_routes
 
 
 def run_loop(state: WorldState, components: Components, n_ticks: int,
              settings, logger: Callable[..., None] = print) -> WorldState:
+    if not state.plan and state.total_orders_pending() > 0:
+        plan_routes(state, components.optimizer)
     for _ in range(n_ticks):
         components.simulator.tick(state)
 
