@@ -81,3 +81,76 @@ def parse_decision(data: dict, event: Event, seq: int, clock) -> Decision:
         impact_estimate={"added_delay_min": added_delay},
         reasoning=str(data.get("reasoning", "")),
     )
+
+
+class ClaudeAgent:
+    """DecisionEngine backed by Claude (Anthropic SDK).
+
+    `complete(system, user) -> dict` is injected so the decide path is testable
+    offline. When omitted, a lazy default transport is built from
+    `settings.anthropic_api_key` on first use (requires the optional `anthropic`
+    package and a valid key)."""
+
+    def __init__(self, settings=None,
+                 complete: Callable[[str, str], dict] = None):
+        self.settings = settings
+        self._complete = complete
+        self._seq = 0
+
+    def decide(self, state: WorldState, events: List[Event]) -> List[Decision]:
+        out: List[Decision] = []
+        for event in events:
+            self._seq += 1
+            try:
+                system, user = build_messages(state, event)
+                data = self._get_complete()(system, user)
+                out.append(parse_decision(data, event, self._seq, state.clock))
+            except Exception:
+                out.append(self._fallback(event, self._seq, state.clock))
+        return out
+
+    def _fallback(self, event: Event, seq: int, clock) -> Decision:
+        """Rule-based action when the LLM call/parse fails — the loop always gets
+        a decision per event. Reuses RuleBasedEngine's event->action map (DRY)."""
+        action = _ACTION_BY_EVENT.get(event.event_type, DecisionAction.REROUTE)
+        return Decision(
+            id=f"DEC_{seq:03d}", timestamp=clock, event_id=event.id,
+            action=action, engine=DecisionEngine.RULE_BASED,
+            description=f"[claude->rule fallback] {event.event_type.value} "
+                        f"on {event.target}",
+            impact_estimate={"added_delay_min": _DEFAULT_ADDED_DELAY_MIN},
+            reasoning="claude transport failed; used rule-based fallback",
+        )
+
+    def _get_complete(self) -> Callable[[str, str], dict]:
+        if self._complete is None:
+            self._complete = self._build_default_complete()
+        return self._complete
+
+    def _build_default_complete(self) -> Callable[[str, str], dict]:
+        """Lazily build the real Anthropic transport. Imported here so the
+        dependency is optional and tests never touch the network."""
+        api_key = getattr(self.settings, "anthropic_api_key", "") or ""
+        if not api_key:
+            raise RuntimeError(
+                "ClaudeAgent has no transport and settings.anthropic_api_key is "
+                "empty; configure a key or inject a `complete` callable.")
+
+        import anthropic  # optional dep
+
+        client = anthropic.Anthropic(api_key=api_key)
+
+        def complete(system: str, user: str) -> dict:
+            resp = client.messages.create(
+                model=_MODEL,
+                max_tokens=1024,
+                thinking={"type": "adaptive"},
+                system=system,
+                output_config={"format": {"type": "json_schema",
+                                          "schema": _DECISION_SCHEMA}},
+                messages=[{"role": "user", "content": user}],
+            )
+            text = next(b.text for b in resp.content if b.type == "text")
+            return json.loads(text)
+
+        return complete

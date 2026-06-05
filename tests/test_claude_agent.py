@@ -62,3 +62,48 @@ def test_parse_decision_rejects_unknown_action():
             {"action": "teleport", "reasoning": "x", "added_delay_min": 1},
             event=_event(), seq=2, clock=datetime(2026, 6, 4, 7, 5),
         )
+
+
+from fleet.agent.claude_agent import ClaudeAgent
+
+
+def test_decide_uses_transport_and_returns_decisions():
+    state = build_sample_state()
+    calls = []
+
+    def fake_complete(system, user):
+        calls.append((system, user))
+        return {"action": "reroute", "reasoning": "flood detour",
+                "added_delay_min": 12}
+
+    agent = ClaudeAgent(settings=None, complete=fake_complete)
+    decisions = agent.decide(state, [_event()])
+
+    assert len(decisions) == 1
+    d = decisions[0]
+    assert d.action == DecisionAction.REROUTE
+    assert d.engine == DecisionEngine.CLAUDE
+    assert d.reasoning == "flood detour"
+    assert calls and "DEPOT->C001" in calls[0][1]
+
+
+def test_decide_falls_back_to_rule_action_on_transport_error():
+    state = build_sample_state()
+
+    def boom(system, user):
+        raise RuntimeError("api down")
+
+    agent = ClaudeAgent(settings=None, complete=boom)
+    decisions = agent.decide(state, [_event()])
+
+    assert len(decisions) == 1
+    d = decisions[0]
+    # FLOODED_AREA -> REROUTE per the rule-based map; tagged as the fallback engine
+    assert d.action == DecisionAction.REROUTE
+    assert d.engine == DecisionEngine.RULE_BASED
+    assert d.event_id == "EVT_001"
+
+
+def test_decide_no_events_returns_empty():
+    agent = ClaudeAgent(settings=None, complete=lambda s, u: {})
+    assert agent.decide(build_sample_state(), []) == []
