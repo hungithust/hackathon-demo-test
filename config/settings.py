@@ -18,6 +18,8 @@ class Settings:
     cuopt_endpoint: str = ""
     auto_approve_delay_threshold_min: float = 15.0   # spec §6.6
     sla_critical_threshold_min: float = 30.0         # spec §6.2
+    demand_noise: float = 0.3                        # M2: demand multiplicative noise (±)
+    restock_interval_min: int = 240                  # M2: depot restock cadence (sim minutes)
 
 
 def load_settings(env: Optional[Mapping[str, str]] = None) -> Settings:
@@ -36,4 +38,6 @@ def load_settings(env: Optional[Mapping[str, str]] = None) -> Settings:
             e.get("AUTO_APPROVE_DELAY_THRESHOLD_MIN", "15")),
         sla_critical_threshold_min=float(
             e.get("SLA_CRITICAL_THRESHOLD_MIN", "30")),
+        demand_noise=float(e.get("DEMAND_NOISE", "0.3")),
+        restock_interval_min=int(e.get("RESTOCK_INTERVAL_MIN", "240")),
     )
