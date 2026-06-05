@@ -1,6 +1,13 @@
-streamlit>=1.37
-anthropic>=0.39
-networkx>=3.0
-plotly>=5.20
-pandas>=2.0
-numpy>=1.26
+pytest>=7.4
+ortools>=9.8
+# Optional (M4, GPU): NVIDIA cuOpt self-hosted thin client. Only needed when
+# ROUTING_ENGINE=cuopt with a live cuOpt server. The CPU solver (ortools) is the
+# default and the test suite never imports this.
+# cuopt-sh-client
+# Optional (M5, LLM): official Anthropic SDK. Only needed when
+# DECISION_ENGINE=claude with ANTHROPIC_API_KEY set. The rule-based engine is the
+# default and the test suite never imports this (transport is injected).
+# anthropic
+# UI (M7): Streamlit dashboard. Needed only to run `streamlit run fleet/ui/app.py`;
+# the headless system and the test suite do not import it.
+streamlit>=1.30
