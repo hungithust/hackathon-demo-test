@@ -7,6 +7,7 @@ agent have something real to react to. Fully deterministic given settings.seed."
 
 import random
 from datetime import timedelta
+from typing import Dict
 
 from fleet.contracts.state import (
     WorldState, Event, EventType, EventSeverity,
@@ -33,16 +34,30 @@ _BASE_RATE_PER_HOUR = {
 _DEFAULT_BASE_RATE = 5.0
 
 
+def _pending_demand_by_sku(state: WorldState) -> Dict[str, int]:
+    out: Dict[str, int] = {}
+    for c in state.customers.values():
+        for sku, qty in c.orders.items():
+            out[sku] = out.get(sku, 0) + qty
+    return out
+
+
 class WorldSimulator:
     def __init__(self, settings):
         self.settings = settings
         self.rng = random.Random(settings.seed)
         self._evt_seq = 0
+        self._mins_since_restock = 0
+        self._restock_batch = None      # lazily snapshotted on first tick
 
     def tick(self, state: WorldState) -> None:
         state.clock += timedelta(minutes=self.settings.tick_minutes)
         state.sim_tick += 1
+        if self._restock_batch is None:
+            self._restock_batch = dict(state.depot.inventory)
         self._generate_demand(state)
+        self._maybe_restock(state)
+        self._update_shortage_events(state)
 
     def inject_event(self, state: WorldState, event_type: EventType,
                      target: str, severity: EventSeverity) -> Event:
@@ -79,3 +94,39 @@ class WorldSimulator:
                 continue
             sku = self.rng.choice(skus)
             c.orders[sku] = c.orders.get(sku, 0) + units
+
+    def _maybe_restock(self, state: WorldState) -> None:
+        self._mins_since_restock += self.settings.tick_minutes
+        if self._mins_since_restock < self.settings.restock_interval_min:
+            return
+        self._mins_since_restock = 0
+        for sku, qty in (self._restock_batch or {}).items():
+            state.depot.inventory[sku] = state.depot.inventory.get(sku, 0) + qty
+
+    def _update_shortage_events(self, state: WorldState) -> None:
+        pending = _pending_demand_by_sku(state)
+        active = {e.target: e for e in state.events
+                  if e.event_type == EventType.INVENTORY_SHORTAGE
+                  and e.ended_at is None}
+        for sku, stock in state.depot.inventory.items():
+            demand = pending.get(sku, 0)
+            if demand > stock:
+                if sku not in active:
+                    state.events.append(Event(
+                        id=self._new_event_id(),
+                        event_type=EventType.INVENTORY_SHORTAGE, target=sku,
+                        severity=self._shortage_severity(demand, stock),
+                        started_at=state.clock,
+                        description=f"shortage SKU {sku}: pending {demand} > stock {stock}",
+                        metrics={"pending": float(demand), "stock": float(stock)},
+                    ))
+            elif sku in active:
+                active[sku].ended_at = state.clock
+
+    @staticmethod
+    def _shortage_severity(demand: int, stock: int) -> EventSeverity:
+        if stock <= 0 or demand >= stock * 2:
+            return EventSeverity.CRITICAL
+        if demand >= stock * 1.5:
+            return EventSeverity.HIGH
+        return EventSeverity.MEDIUM
