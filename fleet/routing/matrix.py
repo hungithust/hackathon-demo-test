@@ -32,3 +32,19 @@ def shortest_times_from(graph: RoadGraph, source: str,
                 dist[edge.to_node] = nd
                 heapq.heappush(pq, (nd, edge.to_node))
     return dist
+
+
+def build_time_matrix(graph: RoadGraph, locations: List[str],
+                      wade_capability: float) -> List[List[float]]:
+    """N×N travel-time matrix (minutes) over `locations`, indexed by position in
+    the list. `matrix[i][j]` = shortest time from locations[i] to locations[j]
+    for a vehicle of the given wade capability; INF if unreachable."""
+    n = len(locations)
+    pos = {loc: i for i, loc in enumerate(locations)}
+    matrix = [[INF] * n for _ in range(n)]
+    for i, src in enumerate(locations):
+        matrix[i][i] = 0.0
+        for loc, t in shortest_times_from(graph, src, wade_capability).items():
+            if loc in pos:
+                matrix[i][pos[loc]] = t
+    return matrix

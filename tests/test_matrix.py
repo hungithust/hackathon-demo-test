@@ -53,3 +53,28 @@ def test_dijkstra_uses_traffic_factor_in_weight():
 def test_dijkstra_unreachable_node_absent():
     g = _graph([RoadEdge("A", "B", 1, 5)])
     assert "Z" not in shortest_times_from(g, "A", 1.0)
+
+
+from fleet.routing.matrix import build_time_matrix
+from fleet.scenarios import build_sample_state
+
+_SAMPLE_LOCS = ["DEPOT", "C001", "C002", "C003", "C004"]
+
+
+def test_matrix_diagonal_zero_and_directed():
+    g = _graph([RoadEdge("A", "B", 1, 10)])   # only A->B
+    m = build_time_matrix(g, ["A", "B"], 1.0)
+    assert m[0][0] == 0.0 and m[1][1] == 0.0
+    assert m[0][1] == 10.0      # A->B
+    assert m[1][0] == INF       # no B->A edge
+
+
+def test_matrix_on_sample_excludes_flood_route_for_truck():
+    m = build_time_matrix(build_sample_state().road_graph, _SAMPLE_LOCS, 0.3)
+    # flooded DEPOT->C001#2 (6 min) impassable for wade 0.3 -> use the 10-min edge
+    assert m[0][1] == 10.0
+
+
+def test_matrix_on_sample_uses_flood_shortcut_for_amphibious():
+    m = build_time_matrix(build_sample_state().road_graph, _SAMPLE_LOCS, 0.6)
+    assert m[0][1] == 6.0       # can wade -> faster flooded shortcut
