@@ -16,6 +16,18 @@ def test_defaults():
     assert s.demand_noise == 0.3
     assert s.restock_interval_min == 240
     assert s.solver_time_limit_sec == 0
+    assert s.ewma_alpha == 0.3
+    assert s.zscore_threshold == 2.0
+    assert s.traffic_alert_factor == 3.0
+
+
+def test_m6_setting_env_overrides():
+    s = load_settings(env={"EWMA_ALPHA": "0.5",
+                           "ZSCORE_THRESHOLD": "2.5",
+                           "TRAFFIC_ALERT_FACTOR": "4"})
+    assert s.ewma_alpha == 0.5
+    assert s.zscore_threshold == 2.5
+    assert s.traffic_alert_factor == 4.0
 
 
 def test_solver_time_limit_env_override():
