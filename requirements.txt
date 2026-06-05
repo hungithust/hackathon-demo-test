@@ -8,3 +8,6 @@ ortools>=9.8
 # DECISION_ENGINE=claude with ANTHROPIC_API_KEY set. The rule-based engine is the
 # default and the test suite never imports this (transport is injected).
 # anthropic
+# UI (M7): Streamlit dashboard. Needed only to run `streamlit run fleet/ui/app.py`;
+# the headless system and the test suite do not import it.
+streamlit>=1.30

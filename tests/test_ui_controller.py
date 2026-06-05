@@ -81,3 +81,18 @@ def test_approving_a_reroute_resolves_routes():
     c.state.decisions.append(d)
     c.approve(d.id)
     assert c.state.plan        # reroute() wrote a fresh plan
+
+
+def test_end_to_end_step_then_approve_flow():
+    c, d = _controller_with_pending_decision()
+    before = c.snapshot()
+    assert before["decisions"]["pending"] >= 1
+    c.approve(d.id)
+    after = c.snapshot()
+    assert after["decisions"]["pending"] == before["decisions"]["pending"] - 1
+    assert after["decisions"]["approved"] == before["decisions"]["approved"] + 1
+    # stepping further keeps the world consistent and JSON-safe
+    import json
+    c.step(2)
+    json.dumps(c.snapshot())
+    assert c.snapshot()["sim_tick"] == before["sim_tick"] + 2
