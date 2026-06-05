@@ -33,6 +33,7 @@ NCC→kho→DC→retail; tool "đổi nhà cung cấp dự phòng" (vì khách h
 cung cấp). Vẫn chỉ vận tải **đường bộ**.
 
 ### Mục tiêu cốt lõi (giữ nguyên tinh thần tài liệu gốc)
+
 1. Tự phát hiện biến động trong vài giây.
 2. Tự suy luận & đề xuất phương án tối ưu cho đội xe.
 3. Tự thực thi việc nhỏ; xin con người phê duyệt việc lớn; rồi phát lệnh điều phối.
@@ -41,14 +42,14 @@ cung cấp). Vẫn chỉ vận tải **đường bộ**.
 
 ## 2. Ràng buộc & quyết định nền tảng (đã chốt)
 
-| Hạng mục | Quyết định |
-|---|---|
-| Thời gian / team | 1-2 tuần, team mạnh → làm thật được vài thuật toán lõi |
-| Nguồn data | **Simulator là "thế giới"** — engine mô phỏng sinh stream realtime VÀ nhận lệnh ngược từ agent. Không dùng dataset tĩnh. (Có thể cắm 1-2 API thật như topping, nhưng lõi chạy offline để demo an toàn.) |
-| Quy mô mạng | Nhỏ-gọn có chủ đích: ~6-8 điểm giao, ~3-5 xe, 5-10 SKU, 1 depot |
-| Vai trò LLM | **Claude điều phối (ReAct + tool-calling)**; thuật toán/tool lo tính toán chính xác |
-| Bài toán lịch giao | **VRPTW**: có khung giờ nhận hàng + ràng buộc tải trọng xe |
-| Stack | **Python full-stack**: Streamlit + Plotly cho UI; backend Python cho sim/agent/Claude SDK |
+| Hạng mục            | Quyết định                                                                                                                                                                                                                           |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Thời gian / team     | 1-2 tuần, team mạnh → làm thật được vài thuật toán lõi                                                                                                                                                                      |
+| Nguồn data           | **Simulator là "thế giới"** — engine mô phỏng sinh stream realtime VÀ nhận lệnh ngược từ agent. Không dùng dataset tĩnh. (Có thể cắm 1-2 API thật như topping, nhưng lõi chạy offline để demo an toàn.) |
+| Quy mô mạng         | Nhỏ-gọn có chủ đích: ~6-8 điểm giao, ~3-5 xe, 5-10 SKU, 1 depot                                                                                                                                                                 |
+| Vai trò LLM          | **Claude điều phối (ReAct + tool-calling)**; thuật toán/tool lo tính toán chính xác                                                                                                                                      |
+| Bài toán lịch giao | **VRPTW**: có khung giờ nhận hàng + ràng buộc tải trọng xe                                                                                                                                                                |
+| Stack                 | **Python full-stack**: Streamlit + Plotly cho UI; backend Python cho sim/agent/Claude SDK                                                                                                                                         |
 
 ---
 
@@ -82,6 +83,7 @@ Ba thành phần quay quanh một **World State** chung (in-memory), theo vòng 
 ```
 
 **Một vòng lặp (vd mỗi 2-3 giây thực = X phút mô phỏng):**
+
 1. **Simulator tick**: xe di chuyển dọc tuyến, kho tiêu thụ, điểm giao phát sinh
    nhu cầu → cập nhật State.
 2. **Detect**: rule/threshold + z-score quét State → gắn cờ biến động + mức nghiêm
@@ -94,6 +96,7 @@ Ba thành phần quay quanh một **World State** chung (in-memory), theo vòng 
    ghi audit log → đưa vào context vòng sau.
 
 **Module tách bạch (interface rõ ràng):**
+
 - `simulator/` — thế giới: tick engine, sinh data, `inject_event()`.
 - `detection/` — phát hiện biến động (rule + z-score).
 - `agent/` — não (Claude orchestrator) + 4 tool.
@@ -128,6 +131,7 @@ State là **một dataclass Python duy nhất**, giữ in-memory. Có thể snap
 ## 5. Simulator — cách sinh data & tiêm biến động
 
 ### 5.1. Sinh data mỗi tick (luật đơn giản, có cấu trúc giống thật)
+
 - **Nhu cầu/đơn tại điểm giao**: mỗi customer phát sinh nhu cầu theo **mùa vụ
   (sin theo giờ) + nhiễu (Poisson/Gaussian)**. Lịch sử này cũng là dữ liệu cho model
   dự báo học.
@@ -136,14 +140,15 @@ State là **một dataclass Python duy nhất**, giữ in-memory. Có thể snap
 - Nhiễu **seed được** → demo có thể replay y hệt (an toàn) hoặc bật random cho sống.
 
 ### 5.2. `inject_event(type, target, severity)` — input on-demand
+
 Panel "Tiêm biến động" trên dashboard cho phép MC/giám khảo bấm tạo biến động:
 
-| Loại | Tiêm vào State | Agent phản ứng |
-|---|---|---|
-| Vận chuyển | `edge.status=blocked` / `traffic_factor=5` | `reroute` + xếp lại ETA |
-| Nhu cầu | thêm đơn khẩn vào `customer.orders` | chèn vào lịch (`plan_routes`) |
-| Tồn kho | `depot.inventory[sku]` thiếu hụt | `check_inventory` ưu tiên đơn |
-| Đội xe | `vehicle.status=broken` | phân bổ lại điểm sang xe khác |
+| Loại        | Tiêm vào State                               | Agent phản ứng                    |
+| ------------ | ---------------------------------------------- | ----------------------------------- |
+| Vận chuyển | `edge.status=blocked` / `traffic_factor=5` | `reroute` + xếp lại ETA         |
+| Nhu cầu     | thêm đơn khẩn vào `customer.orders`     | chèn vào lịch (`plan_routes`)  |
+| Tồn kho     | `depot.inventory[sku]` thiếu hụt           | `check_inventory` ưu tiên đơn |
+| Đội xe     | `vehicle.status=broken`                      | phân bổ lại điểm sang xe khác |
 
 Bổ sung: cơ chế **sinh biến động ngẫu nhiên theo thời gian** (tùy chọn bật/tắt) để
 demo "sống" mà không cần bấm tay liên tục.
@@ -156,12 +161,12 @@ demo "sống" mà không cần bấm tay liên tục.
 giải kết quả → đưa ra **đề xuất + ước tính tác động** (phút trễ giảm, km tiết kiệm,
 đơn cứu được) + **cờ duyệt** + **chuỗi giải thích** đọc được.
 
-| Tool | Engine | Dùng khi |
-|---|---|---|
-| `plan_routes` | **OR-Tools VRPTW** (depot, xe + tải trọng, đơn + khung giờ) | Lập lịch đầu ngày & xếp lại khi biến động lớn |
-| `reroute` | Dijkstra/A* trên `road_graph` (cập nhật ma trận thời gian khi tắc) | Đường tắc/ngập |
-| `check_inventory` | Heuristic ưu tiên đơn theo SLA/priority khi kho thiếu SKU | Thiếu hàng tại kho |
-| `forecast_demand` | Mô hình nhẹ (Prophet hoặc EWMA + mùa vụ) trên lịch sử sim | Cảnh báo chủ động 24h trước |
+| Tool                | Engine                                                                     | Dùng khi                                                |
+| ------------------- | -------------------------------------------------------------------------- | -------------------------------------------------------- |
+| `plan_routes`     | **OR-Tools VRPTW** (depot, xe + tải trọng, đơn + khung giờ)     | Lập lịch đầu ngày & xếp lại khi biến động lớn |
+| `reroute`         | Dijkstra/A* trên `road_graph` (cập nhật ma trận thời gian khi tắc) | Đường tắc/ngập                                      |
+| `check_inventory` | Heuristic ưu tiên đơn theo SLA/priority khi kho thiếu SKU             | Thiếu hàng tại kho                                    |
+| `forecast_demand` | Mô hình nhẹ (Prophet hoặc EWMA + mùa vụ) trên lịch sử sim         | Cảnh báo chủ động 24h trước                       |
 
 **Fallback an toàn**: nếu Claude/API lỗi, hệ thống vẫn ra được quyết định hợp lý
 bằng heuristic mặc định (vd gọi thẳng `plan_routes`), để demo không bao giờ chết.

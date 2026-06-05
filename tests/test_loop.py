@@ -56,19 +56,8 @@ def test_critical_event_is_queued_not_executed():
     assert d in s.get_pending_decisions()
 
 
-def _heal_sample_floods(s):
-    # The sample world ships parallel flooded DEPOT<->C001 links; with the real
-    # RuleDetector they surface FLOODED_AREA every tick -> perpetual REROUTE that
-    # resets the plan. Heal them so these tests can observe vehicle progress.
-    for eid in ("DEPOT->C001#2", "C001->DEPOT#2"):
-        if eid in s.road_graph.edges:
-            s.road_graph.edges[eid].status = EdgeStatus.OPEN
-            s.road_graph.edges[eid].flood_level = 0.0
-
-
 def test_loop_world_comes_alive_over_many_ticks():
     s = build_sample_state()
-    _heal_sample_floods(s)
     settings = load_settings(env={"TICK_MINUTES": "30",
                                   "RESTOCK_INTERVAL_MIN": "100000"})
     comps = build_components(settings)
@@ -82,7 +71,6 @@ def test_loop_world_comes_alive_over_many_ticks():
 
 def test_loop_plans_and_moves_vehicles():
     s = build_sample_state()
-    _heal_sample_floods(s)
     # seed a concrete order so there is something to plan + deliver
     s.customers["C001"].orders = {"SKUX": 20}
     s.depot.inventory["SKUX"] = 200
@@ -93,6 +81,27 @@ def test_loop_plans_and_moves_vehicles():
     visited = [st for r in s.plan.values() for st in r.stops
                if st.actual_arrival is not None]
     assert visited                                  # at least one delivery happened
+
+
+def test_standing_flood_does_not_re_fire_every_tick():
+    # Regression: the sample world ships permanently flooded parallel edges. The
+    # detector used to re-emit FLOODED_AREA every tick -> a fresh REROUTE that
+    # wiped the in-progress plan, so vehicles never delivered. With event-lifecycle
+    # reconciliation the standing condition is ONE persistent event / ONE decision.
+    s = build_sample_state()                      # NOTE: no _heal_sample_floods
+    settings = load_settings(env={"TICK_MINUTES": "30"})
+    comps = build_components(settings)
+    run_loop(s, comps, n_ticks=20, settings=settings, logger=_silent)
+
+    reroutes = [d for d in s.decisions if d.action == DecisionAction.REROUTE]
+    assert len(reroutes) <= 2                      # not 1-per-tick (was 40)
+    # the world actually progresses: at least one real delivery happened
+    assert any(st.actual_arrival is not None
+               for r in s.plan.values() for st in r.stops)
+    # every decision references an event that exists in the log (coherent timeline)
+    event_ids = {e.id for e in s.events}
+    assert all(d.event_id in event_ids
+               for d in s.decisions if d.event_id is not None)
 
 
 def test_loop_reroutes_on_edge_disruption(monkeypatch):

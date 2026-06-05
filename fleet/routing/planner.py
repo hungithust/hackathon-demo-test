@@ -38,5 +38,20 @@ def reroute(state: WorldState, optimizer: RouteOptimizer,
             depot_id: str = "DEPOT") -> List[str]:
     """Re-solve from scratch against the current road graph. Because the time
     matrix is rebuilt from live edge statuses, a blocked/flooded edge is already
-    excluded and the routes adapt automatically. Returns dropped customer ids."""
-    return plan_routes(state, optimizer, depot_id)
+    excluded and the routes adapt automatically. Returns dropped customer ids.
+
+    Already-completed deliveries are preserved: any stop the new plan re-emits for
+    a customer that was already visited keeps its actual arrival/departure, so an
+    in-progress run is never silently reset to "not yet delivered"."""
+    visited = {
+        s.customer_id: (s.actual_arrival, s.actual_departure)
+        for route in state.plan.values() for s in route.stops
+        if s.actual_arrival is not None
+    }
+    dropped = plan_routes(state, optimizer, depot_id)
+    if visited:
+        for route in state.plan.values():
+            for s in route.stops:
+                if s.customer_id in visited:
+                    s.actual_arrival, s.actual_departure = visited[s.customer_id]
+    return dropped

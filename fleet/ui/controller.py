@@ -5,9 +5,10 @@ reroute so the UI behaves identically to the headless loop."""
 
 from typing import Dict, List, Optional
 
-from fleet.contracts.state import ApprovalStatus, DecisionAction
+from fleet.contracts.state import ApprovalStatus
 from fleet.scenarios import build_sample_state
 from fleet.factory import build_components
+from fleet.dispatch.dispatcher import RESOLVE_ACTIONS
 from fleet.routing.planner import reroute
 from config.settings import load_settings
 
@@ -73,8 +74,7 @@ class SimulationController:
         d.approved_by = "human"
         d.approved_at = self.state.clock
         self.components.dispatcher.apply(self.state, d)
-        if (d.action == DecisionAction.REROUTE
-                and self.state.total_orders_pending() > 0):
+        if d.action in RESOLVE_ACTIONS and self.state.total_orders_pending() > 0:
             reroute(self.state, self.components.optimizer)
         return d
 

@@ -8,7 +8,7 @@ outgoing edges keeps the minimum. Pure + deterministic; no solver here."""
 import heapq
 from typing import Dict, List
 
-from fleet.contracts.state import RoadGraph, WorldState
+from fleet.contracts.state import RoadGraph, WorldState, VehicleStatus
 from fleet.contracts.dto import RoutingProblem, FleetVehicleSpec, TaskSpec
 
 DEFAULT_SERVICE_TIME_MIN = 10.0   # per-stop service time (no per-customer field yet)
@@ -67,8 +67,12 @@ def build_routing_problem(state: WorldState,
                if sum(state.customers[cid].orders.values()) > 0]
     locations = [depot_id] + pending
 
+    # broken / in-maintenance vehicles can't take new work -> excluded from the solve.
+    available = [v for v in state.vehicles.values()
+                 if v.status not in (VehicleStatus.BROKEN, VehicleStatus.MAINTENANCE)]
+
     by_type: Dict[str, list] = {}
-    for v in state.vehicles.values():
+    for v in available:
         by_type.setdefault(v.veh_type, []).append(v)
     time_matrix = {
         vt: build_time_matrix(state.road_graph, locations,
@@ -82,7 +86,7 @@ def build_routing_problem(state: WorldState,
             shift_start=v.shift_start or state.depot.opening_time,
             shift_end=v.shift_end or state.depot.closing_time,
         )
-        for v in state.vehicles.values()
+        for v in available
     ]
 
     tasks = []
