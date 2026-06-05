@@ -28,9 +28,9 @@ class Components:
 def build_components(settings) -> Components:
     # Routing engine (cuOpt adapter arrives in M4; falls back to CPU until then).
     if settings.routing_engine == "cuopt":
-        optimizer: RouteOptimizer = CpuSolver()  # TODO M4: CuOptAdapter(settings)
+        optimizer: RouteOptimizer = CpuSolver(settings)  # TODO M4: CuOptAdapter(settings)
     else:
-        optimizer = CpuSolver()
+        optimizer = CpuSolver(settings)
 
     # Decision engine (Claude arrives in M5; rule-based is the default/fallback).
     if settings.decision_engine == "claude":
