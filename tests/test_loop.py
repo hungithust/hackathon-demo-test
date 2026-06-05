@@ -3,7 +3,10 @@ from datetime import timedelta
 from fleet.scenarios import build_sample_state
 from fleet.factory import build_components
 from fleet.loop import run_loop
-from fleet.contracts.state import EventType, EventSeverity, DecisionAction, ApprovalStatus
+from fleet.contracts.state import (
+    EventType, EventSeverity, DecisionAction, ApprovalStatus, EdgeStatus,
+)
+import fleet.loop as loop_module
 from config.settings import load_settings
 
 
@@ -78,3 +81,30 @@ def test_loop_plans_and_moves_vehicles():
     visited = [st for r in s.plan.values() for st in r.stops
                if st.actual_arrival is not None]
     assert visited                                  # at least one delivery happened
+
+
+def test_loop_reroutes_on_edge_disruption(monkeypatch):
+    s = build_sample_state()
+    s.customers["C001"].orders = {"SKUX": 20}
+    s.depot.inventory["SKUX"] = 200
+    settings = load_settings()
+    comps = build_components(settings)
+
+    calls = {"n": 0}
+    orig = loop_module.reroute
+
+    def _spy(*args, **kwargs):
+        calls["n"] += 1
+        return orig(*args, **kwargs)
+
+    monkeypatch.setattr(loop_module, "reroute", _spy, raising=False)
+
+    # flood the depot->C001 link: FLOODED_AREA -> RuleBasedEngine REROUTE -> auto-approve
+    comps.simulator.disrupt_edge(s, "DEPOT->C001", EdgeStatus.FLOODED,
+                                 flood_level=0.9)
+    run_loop(s, comps, n_ticks=1, settings=settings, logger=_silent)
+    reroutes = [d for d in s.decisions
+                if d.action == DecisionAction.REROUTE
+                and d.approval_status == ApprovalStatus.APPROVED]
+    assert reroutes                       # the loop produced + approved a reroute
+    assert calls["n"] > 0                 # the loop actually re-solved

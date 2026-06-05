@@ -6,10 +6,10 @@ The same `state` + components are reused by the Streamlit UI in M7."""
 
 from typing import Callable
 
-from fleet.contracts.state import WorldState, ApprovalStatus
+from fleet.contracts.state import WorldState, ApprovalStatus, DecisionAction
 from fleet.factory import Components
 from fleet.dispatch.approval import should_auto_approve
-from fleet.routing.planner import plan_routes
+from fleet.routing.planner import plan_routes, reroute
 
 
 def run_loop(state: WorldState, components: Components, n_ticks: int,
@@ -30,6 +30,7 @@ def run_loop(state: WorldState, components: Components, n_ticks: int,
         severity_by_event = {e.id: e.severity for e in events}
         decisions = components.decision_engine.decide(state, events)
 
+        rerouted = False
         for d in decisions:
             state.decisions.append(d)
             severity = severity_by_event.get(d.event_id)
@@ -38,11 +39,16 @@ def run_loop(state: WorldState, components: Components, n_ticks: int,
                 d.approved_by = "auto"
                 d.approved_at = state.clock
                 components.dispatcher.apply(state, d)
+                if d.action == DecisionAction.REROUTE:
+                    rerouted = True
                 verdict = "AUTO-APPLIED"
             else:
                 verdict = "QUEUED(approval)"
             logger(f"t={state.sim_tick} clock={state.clock} "
                    f"{d.action.value} <- {d.event_id} [{verdict}]")
+
+        if rerouted and state.total_orders_pending() > 0:
+            reroute(state, components.optimizer)
 
         logger(f"t={state.sim_tick} clock={state.clock} "
                f"active_events={len(events)} pending={len(state.get_pending_decisions())}")
