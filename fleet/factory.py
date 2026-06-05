@@ -13,6 +13,7 @@ from fleet.routing.cpu_solver import CpuSolver
 from fleet.routing.cuopt_adapter import CuOptAdapter
 from fleet.forecast.ewma import EwmaForecaster
 from fleet.agent.rule_based import RuleBasedEngine
+from fleet.agent.claude_agent import ClaudeAgent
 from fleet.dispatch.dispatcher import Dispatcher as DispatcherImpl
 
 
@@ -35,9 +36,11 @@ def build_components(settings) -> Components:
     else:
         optimizer = CpuSolver(settings)
 
-    # Decision engine (Claude arrives in M5; rule-based is the default/fallback).
-    if settings.decision_engine == "claude":
-        decision_engine: DecisionEngine = RuleBasedEngine()  # TODO M5: ClaudeAgent
+    # Decision engine. Claude (LLM) when requested AND an API key is configured;
+    # otherwise fall back to the rule-based engine so the system always runs.
+    if settings.decision_engine == "claude" and getattr(
+            settings, "anthropic_api_key", ""):
+        decision_engine: DecisionEngine = ClaudeAgent(settings)
     else:
         decision_engine = RuleBasedEngine()
 

@@ -4,3 +4,7 @@ ortools>=9.8
 # ROUTING_ENGINE=cuopt with a live cuOpt server. The CPU solver (ortools) is the
 # default and the test suite never imports this.
 # cuopt-sh-client
+# Optional (M5, LLM): official Anthropic SDK. Only needed when
+# DECISION_ENGINE=claude with ANTHROPIC_API_KEY set. The rule-based engine is the
+# default and the test suite never imports this (transport is injected).
+# anthropic

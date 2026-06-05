@@ -5,6 +5,7 @@ from fleet.factory import Components, build_components
 from fleet.routing.cpu_solver import CpuSolver
 from fleet.routing.cuopt_adapter import CuOptAdapter
 from fleet.agent.rule_based import RuleBasedEngine
+from fleet.agent.claude_agent import ClaudeAgent
 from config.settings import load_settings
 
 
@@ -36,3 +37,17 @@ def test_cuopt_engine_without_endpoint_falls_back_to_cpu():
     s = load_settings(env={"ROUTING_ENGINE": "cuopt", "CUOPT_ENDPOINT": ""})
     comps = build_components(s)
     assert isinstance(comps.optimizer, CpuSolver)
+
+
+def test_claude_engine_with_key_selects_claude_agent():
+    s = load_settings(env={"DECISION_ENGINE": "claude",
+                           "ANTHROPIC_API_KEY": "sk-test"})
+    comps = build_components(s)
+    assert isinstance(comps.decision_engine, ClaudeAgent)
+
+
+def test_claude_engine_without_key_falls_back_to_rule():
+    s = load_settings(env={"DECISION_ENGINE": "claude",
+                           "ANTHROPIC_API_KEY": ""})
+    comps = build_components(s)
+    assert isinstance(comps.decision_engine, RuleBasedEngine)
