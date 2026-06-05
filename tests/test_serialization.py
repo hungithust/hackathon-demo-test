@@ -25,9 +25,9 @@ def _small_state() -> WorldState:
                                 veh_type="truck", wade_capability=0.3)},
         road_graph=RoadGraph(
             nodes={"DEPOT": RoadNode("DEPOT", loc_d), "C1": RoadNode("C1", loc_c)},
-            edges={("DEPOT", "C1"): RoadEdge("DEPOT", "C1", 2.0, 10.0,
-                                             status=EdgeStatus.FLOODED, flood_level=0.4)},
-            adjacency={"DEPOT": ["C1"]}),
+            edges={"DEPOT->C1": RoadEdge("DEPOT", "C1", 2.0, 10.0,
+                                         status=EdgeStatus.FLOODED, flood_level=0.4)},
+            adjacency={"DEPOT": ["DEPOT->C1"]}),
     )
     state.events.append(Event(id="E1", event_type=EventType.TRAFFIC,
                               target="DEPOT->C1", severity=EventSeverity.HIGH,
@@ -50,7 +50,7 @@ def test_round_trip_restores_typed_values():
     restored = WorldState.from_dict(_small_state().to_dict())
     assert restored.clock == datetime(2026, 6, 4, 6, 0)
     assert restored.customers["C1"].priority == 1
-    edge = restored.road_graph.edges[("DEPOT", "C1")]
+    edge = restored.road_graph.get_edge("DEPOT->C1")
     assert edge.status == EdgeStatus.FLOODED
     assert edge.is_passable(0.5) is True
     assert edge.is_passable(0.2) is False

@@ -8,7 +8,7 @@ This module imports NOTHING from other fleet modules.
 from dataclasses import dataclass, field, fields, is_dataclass
 from datetime import datetime
 from enum import Enum, IntEnum
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 
 # ============================================================================
@@ -202,8 +202,19 @@ class RoadEdge:
 @dataclass
 class RoadGraph:
     nodes: Dict[str, RoadNode]
-    edges: Dict[Tuple[str, str], RoadEdge]
+    edges: Dict[str, RoadEdge]                # edge_id -> edge (supports parallel A->B)
     adjacency: Dict[str, List[str]] = field(default_factory=dict)
+    # adjacency[node_id] = ids of edges whose from_node == node_id (outgoing)
+
+    def get_edge(self, edge_id: str) -> Optional["RoadEdge"]:
+        return self.edges.get(edge_id)
+
+    def out_edges(self, node_id: str) -> List["RoadEdge"]:
+        return [self.edges[eid] for eid in self.adjacency.get(node_id, [])
+                if eid in self.edges]
+
+    def edges_between(self, from_node: str, to_node: str) -> List["RoadEdge"]:
+        return [e for e in self.out_edges(from_node) if e.to_node == to_node]
 
 
 @dataclass
@@ -296,8 +307,6 @@ def _encode(obj):
     if isinstance(obj, datetime):
         return {"__dt__": obj.isoformat()}
     if isinstance(obj, dict):
-        if obj and all(isinstance(k, tuple) for k in obj):  # RoadGraph.edges
-            return {"__tuplekeys__": [[list(k), _encode(v)] for k, v in obj.items()]}
         return {k: _encode(v) for k, v in obj.items()}
     if isinstance(obj, (list, tuple)):
         return [_encode(v) for v in obj]
@@ -317,8 +326,6 @@ def _decode(obj):
             return datetime.fromisoformat(obj["__dt__"])
         if "__enum__" in obj:
             return _ENUM_REGISTRY[obj["__enum__"]](obj["value"])
-        if "__tuplekeys__" in obj:
-            return {tuple(k): _decode(v) for k, v in obj["__tuplekeys__"]}
         if "__type__" in obj:
             cls = _DATACLASS_REGISTRY[obj["__type__"]]
             kwargs = {k: _decode(v) for k, v in obj.items() if k != "__type__"}

@@ -65,11 +65,15 @@ def build_sample_state(base_time: datetime = datetime(2026, 6, 4, 6, 0)) -> Worl
     ]
     edges = {}
     adjacency = {n: [] for n in nodes}
+
+    def _add_edge(a, b, km, mins, **kw):
+        e = RoadEdge(a, b, km, mins, **kw)
+        edges[e.id] = e
+        adjacency[a].append(e.id)
+
     for a, b, km, mins in edge_list:
-        edges[(a, b)] = RoadEdge(a, b, km, mins)
-        edges[(b, a)] = RoadEdge(b, a, km, mins)
-        adjacency[a].append(b)
-        adjacency[b].append(a)
+        _add_edge(a, b, km, mins)
+        _add_edge(b, a, km, mins)
 
     return WorldState(
         clock=base_time,
