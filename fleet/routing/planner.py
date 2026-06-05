@@ -32,3 +32,11 @@ def plan_routes(state: WorldState, optimizer: RouteOptimizer,
             end_time=stops[-1].planned_departure,
         )
     return solution.dropped
+
+
+def reroute(state: WorldState, optimizer: RouteOptimizer,
+            depot_id: str = "DEPOT") -> List[str]:
+    """Re-solve from scratch against the current road graph. Because the time
+    matrix is rebuilt from live edge statuses, a blocked/flooded edge is already
+    excluded and the routes adapt automatically. Returns dropped customer ids."""
+    return plan_routes(state, optimizer, depot_id)

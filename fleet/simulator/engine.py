@@ -11,6 +11,7 @@ from typing import Dict
 
 from fleet.contracts.state import (
     WorldState, Event, EventType, EventSeverity, VehicleStatus, Vehicle,
+    EdgeStatus,
 )
 
 
@@ -66,6 +67,33 @@ class WorldSimulator:
             id=self._new_event_id(), event_type=event_type, target=target,
             severity=severity, started_at=state.clock,
             description=f"injected {event_type.value} on {target}",
+        )
+        state.events.append(evt)
+        return evt
+
+    def disrupt_edge(self, state: WorldState, edge_id: str,
+                     new_status: EdgeStatus, flood_level: float = 0.0,
+                     traffic_factor: float = 1.0) -> Event:
+        """Mutate a road edge (block/flood/congest) and emit the matching event so
+        the detector + agent react and the loop's reroute path is exercised."""
+        edge = state.road_graph.get_edge(edge_id)
+        if edge is None:
+            raise KeyError(f"no such edge: {edge_id}")
+        edge.status = new_status
+        if flood_level:
+            edge.flood_level = flood_level
+        if traffic_factor != 1.0:
+            edge.traffic_factor = traffic_factor
+        evt_type = (EventType.FLOODED_AREA
+                    if new_status == EdgeStatus.FLOODED
+                    else EventType.TRAFFIC)
+        severity = (EventSeverity.CRITICAL
+                    if new_status == EdgeStatus.BLOCKED
+                    else EventSeverity.MEDIUM)
+        evt = Event(
+            id=self._new_event_id(), event_type=evt_type, target=edge_id,
+            severity=severity, started_at=state.clock,
+            description=f"{new_status.value} on {edge_id}",
         )
         state.events.append(evt)
         return evt
