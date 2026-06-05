@@ -20,6 +20,7 @@ class Settings:
     sla_critical_threshold_min: float = 30.0         # spec §6.2
     demand_noise: float = 0.3                        # M2: demand multiplicative noise (±)
     restock_interval_min: int = 240                  # M2: depot restock cadence (sim minutes)
+    solver_time_limit_sec: int = 0                   # M3: >0 enables OR-Tools GLS (else deterministic)
 
 
 def load_settings(env: Optional[Mapping[str, str]] = None) -> Settings:
@@ -40,4 +41,5 @@ def load_settings(env: Optional[Mapping[str, str]] = None) -> Settings:
             e.get("SLA_CRITICAL_THRESHOLD_MIN", "30")),
         demand_noise=float(e.get("DEMAND_NOISE", "0.3")),
         restock_interval_min=int(e.get("RESTOCK_INTERVAL_MIN", "240")),
+        solver_time_limit_sec=int(e.get("SOLVER_TIME_LIMIT_SEC", "0")),
     )

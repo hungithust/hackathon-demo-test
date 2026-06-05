@@ -15,6 +15,12 @@ def test_defaults():
     assert s.sla_critical_threshold_min == 30.0
     assert s.demand_noise == 0.3
     assert s.restock_interval_min == 240
+    assert s.solver_time_limit_sec == 0
+
+
+def test_solver_time_limit_env_override():
+    s = load_settings(env={"SOLVER_TIME_LIMIT_SEC": "5"})
+    assert s.solver_time_limit_sec == 5
 
 
 def test_env_overrides():
