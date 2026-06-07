@@ -49,6 +49,7 @@ class Settings:
     score_w_drop: float = 50.0            # M-D: weight on priority-weighted dropped orders
     enable_proactive: bool = False        # M-D: emit proactive shortfall decisions
     oracle_horizon_ticks: int = 12        # M-A(SBv2): ticks to roll a candidate action forward before grading
+    oracle_min_gap: float = 1.0           # M-B(SBv2): min best/worst realized-cost gap to keep an example (else no signal)
 
 
 def load_settings(env: Optional[Mapping[str, str]] = None) -> Settings:
@@ -98,4 +99,5 @@ def load_settings(env: Optional[Mapping[str, str]] = None) -> Settings:
         score_w_drop=float(e.get("SCORE_W_DROP", "50.0")),
         enable_proactive=e.get("ENABLE_PROACTIVE", "0") in ("1", "true", "True"),
         oracle_horizon_ticks=int(e.get("ORACLE_HORIZON_TICKS", "12")),
+        oracle_min_gap=float(e.get("ORACLE_MIN_GAP", "1.0")),
     )
