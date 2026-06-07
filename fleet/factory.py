@@ -18,6 +18,7 @@ from fleet.routing.cuopt_adapter import CuOptAdapter
 from fleet.forecast.ewma import EwmaForecaster
 from fleet.forecast.holt_winters import HoltWintersForecaster
 from fleet.agent.rule_based import RuleBasedEngine
+from fleet.agent.scoring_engine import ScoringEngine
 from fleet.agent.claude_agent import ClaudeAgent
 from fleet.dispatch.dispatcher import Dispatcher as DispatcherImpl
 
@@ -42,10 +43,13 @@ def build_components(settings) -> Components:
         optimizer = CpuSolver(settings)
 
     # Decision engine. Claude (LLM) when requested AND an API key is configured;
-    # otherwise fall back to the rule-based engine so the system always runs.
+    # the scoring policy when requested; otherwise the rule-based engine so the
+    # system always runs.
     if settings.decision_engine == "claude" and getattr(
             settings, "anthropic_api_key", ""):
         decision_engine: DecisionEngine = ClaudeAgent(settings)
+    elif settings.decision_engine == "scoring":
+        decision_engine = ScoringEngine(settings)
     else:
         decision_engine = RuleBasedEngine()
 

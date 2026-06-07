@@ -91,3 +91,19 @@ def test_factory_defaults_to_rule_detector():
     from config.settings import load_settings
     c = build_components(load_settings(env={}))
     assert isinstance(c.detector, RuleDetector)
+
+
+def test_factory_selects_scoring_engine():
+    from fleet.agent.scoring_engine import ScoringEngine
+    from fleet.factory import build_components
+    from config.settings import load_settings
+    c = build_components(load_settings(env={"DECISION_ENGINE": "scoring"}))
+    assert isinstance(c.decision_engine, ScoringEngine)
+
+
+def test_factory_defaults_to_rule_engine():
+    from fleet.agent.rule_based import RuleBasedEngine
+    from fleet.factory import build_components
+    from config.settings import load_settings
+    c = build_components(load_settings(env={}))
+    assert isinstance(c.decision_engine, RuleBasedEngine)
