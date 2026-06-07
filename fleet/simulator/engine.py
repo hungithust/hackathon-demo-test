@@ -133,6 +133,19 @@ class WorldSimulator:
         self._ar_state[cid] = a
         return math.exp(sigma * a - 0.5 * sigma * sigma)
 
+    def _regime_multiplier(self, cid: str, clock) -> float:
+        """Occasional promotion regime: with prob `regime_prob` per call a customer
+        enters a `regime_factor` demand regime lasting `regime_duration_min`."""
+        until = self._regime_until.get(cid)
+        if until is not None and clock < until:
+            return self.settings.regime_factor
+        # not currently in a regime: maybe start one
+        if self.rng.random() < self.settings.regime_prob:
+            self._regime_until[cid] = clock + timedelta(
+                minutes=self.settings.regime_duration_min)
+            return self.settings.regime_factor
+        return 1.0
+
     def _generate_demand(self, state: WorldState) -> None:
         if not state.depot.inventory:
             return

@@ -1,6 +1,7 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from config.settings import load_settings
+from fleet.scenarios import build_sample_state
 from fleet.simulator.engine import _weekly_factor, _trend_factor, WorldSimulator
 
 
@@ -53,3 +54,29 @@ def test_ar_multiplier_is_positive_and_deterministic():
     seq2 = [s2._ar_multiplier("C1") for _ in range(20)]
     assert seq1 == seq2                 # same seed => identical
     assert all(m > 0 for m in seq1)     # multiplier always positive
+
+
+def test_regime_starts_when_prob_one():
+    s = build_sample_state()
+    sim = WorldSimulator(load_settings(env={"REGIME_PROB": "1.0", "REGIME_FACTOR": "2.0"}))
+    m = sim._regime_multiplier("C1", s.clock)
+    assert m == 2.0                       # forced into regime => factor applied
+
+
+def test_no_regime_when_prob_zero():
+    s = build_sample_state()
+    sim = WorldSimulator(load_settings(env={"REGIME_PROB": "0.0"}))
+    assert sim._regime_multiplier("C1", s.clock) == 1.0
+
+
+def test_regime_is_deterministic():
+    s = build_sample_state()
+    s1 = WorldSimulator(load_settings(env={"SEED": "42", "REGIME_PROB": "0.3"}))
+    s2 = WorldSimulator(load_settings(env={"SEED": "42", "REGIME_PROB": "0.3"}))
+    clk = s.clock
+    seq1, seq2 = [], []
+    for _ in range(30):
+        seq1.append(s1._regime_multiplier("C1", clk))
+        seq2.append(s2._regime_multiplier("C1", clk))
+        clk += timedelta(minutes=30)
+    assert seq1 == seq2
