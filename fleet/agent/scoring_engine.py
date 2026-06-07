@@ -54,3 +54,30 @@ def candidate_actions(event_type: EventType) -> List[DecisionAction]:
 
 def _resolves(event_type: EventType, action: DecisionAction) -> bool:
     return action in _RESOLVES.get(event_type, set())
+
+
+def _priority_weight(state: WorldState, event: Event) -> float:
+    """Priority 1 (most urgent) -> 4; priority 4 -> 1; non-customer targets -> 2."""
+    cust = state.customers.get(event.target)
+    if cust is not None:
+        return float(5 - int(cust.priority))
+    return 2.0
+
+
+class _Weights:
+    def __init__(self, settings=None):
+        self.sla = float(getattr(settings, "score_w_sla", 50.0) or 50.0)
+        self.delay = float(getattr(settings, "score_w_delay", 1.0) or 1.0)
+        self.drop = float(getattr(settings, "score_w_drop", 50.0) or 50.0)
+
+
+def score_action(state: WorldState, event: Event, action: DecisionAction,
+                 weights: "_Weights") -> float:
+    """Lower is better. Cost = delay + priority-weighted drops + SLA penalty when
+    the action does NOT resolve the disruption (penalty scales with severity)."""
+    eff = _ACTION_EFFECT[action]
+    cost = weights.delay * max(0.0, eff["delay"])
+    cost += weights.drop * eff["drops"] * _priority_weight(state, event)
+    if not _resolves(event.event_type, action):
+        cost += weights.sla * _SEVERITY_WEIGHT.get(event.severity, 2.0)
+    return cost
