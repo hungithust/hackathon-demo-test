@@ -4,7 +4,8 @@ label, attaches reasoning (Sonnet Batch or a $0 templated fallback), and emits
 train/serve-parity JSONL. Pure CPU; the Batch transport is injected so the test
 suite never imports anthropic or touches the network."""
 
-from fleet.contracts.state import WorldState, Event
+from fleet.contracts.state import WorldState, Event, DecisionAction
+from fleet.agent.claude_agent import build_messages
 
 
 def realized_delay_minutes(state: WorldState) -> float:
@@ -40,3 +41,19 @@ def templated_reasoning(event: Event, scored) -> str:
             f"{best_cost:.1f}")
     alts = ", ".join(f"{a.value}={c:.1f}" for a, c in scored[1:])
     return base + (f" versus {alts}." if alts else ".")
+
+
+def build_record(state: WorldState, event: Event, action: DecisionAction,
+                 added_delay_min: float, reasoning: str) -> dict:
+    """One JSONL row. Prompt fields come verbatim from build_messages (train/serve
+    parity); the assistant turn is the strict _DECISION_SCHEMA object."""
+    system, user = build_messages(state, event)
+    return {
+        "system": system,
+        "user": user,
+        "assistant": {
+            "action": action.value,
+            "reasoning": reasoning,
+            "added_delay_min": round(float(added_delay_min), 2),
+        },
+    }

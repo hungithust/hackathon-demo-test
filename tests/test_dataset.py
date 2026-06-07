@@ -72,3 +72,23 @@ def test_templated_reasoning_handles_single_candidate():
     assert text == (
         "Simulated each option for the traffic on e1; "
         "chose reroute with the lowest realized cost 8.0.")
+
+
+def test_build_record_matches_build_messages_and_schema():
+    from fleet.contracts.state import Event, EventType, EventSeverity, DecisionAction
+    from fleet.agent.claude_agent import build_messages
+    from fleet.agent.dataset import build_record
+    from fleet.scenarios import build_sample_state
+
+    state = build_sample_state()
+    evt = Event(id="E1", event_type=EventType.DEMAND_SURGE, target="C001",
+                severity=EventSeverity.MEDIUM, started_at=state.clock)
+    record = build_record(state, evt, DecisionAction.REPRIORITIZE, 3.0, "because.")
+
+    system, user = build_messages(state, evt)
+    assert record["system"] == system            # train/serve parity
+    assert record["user"] == user
+    assert record["assistant"] == {
+        "action": "reprioritize", "reasoning": "because.", "added_delay_min": 3.0}
+    # assistant turn carries exactly the _DECISION_SCHEMA keys
+    assert set(record["assistant"]) == {"action", "reasoning", "added_delay_min"}
