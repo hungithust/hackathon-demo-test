@@ -46,14 +46,14 @@ Hai nguyên tắc kiến trúc xuyên suốt:
 
 Định nghĩa tại [fleet/contracts/interfaces.py](../fleet/contracts/interfaces.py) — tất cả là `@runtime_checkable Protocol`.
 
-| Interface | Phương thức | Impl mặc định | Impl thay thế | Chọn bằng |
-|---|---|---|---|---|
-| `Simulator` | `tick(state)`, `inject_event(...)` | `WorldSimulator` | — | luôn dùng |
-| `Detector` | `detect(state) -> List[Event]` | `RuleDetector` | `ZScoreDetector` | `DETECTOR_ENGINE` |
-| `RouteOptimizer` | `solve(problem) -> RoutingSolution` | `CpuSolver` (OR-Tools) | `CuOptAdapter` (NVIDIA cuOpt) | `ROUTING_ENGINE` (+`CUOPT_ENDPOINT`) |
-| `Forecaster` | `forecast(history, horizon_h) -> dict` | `EwmaForecaster` | *(prophet chưa có)* | `FORECASTER_ENGINE` |
-| `DecisionEngine` | `decide(state, events) -> List[Decision]` | `RuleBasedEngine` | `ClaudeAgent` (Anthropic SDK) | `DECISION_ENGINE` (+`ANTHROPIC_API_KEY`) |
-| `Dispatcher` | `apply(state, decision)` | `Dispatcher` | — | luôn dùng |
+| Interface          | Phương thức                              | Impl mặc định         | Impl thay thế                  | Chọn bằng                                  |
+| ------------------ | ------------------------------------------- | ------------------------ | ------------------------------- | -------------------------------------------- |
+| `Simulator`      | `tick(state)`, `inject_event(...)`      | `WorldSimulator`       | —                              | luôn dùng                                  |
+| `Detector`       | `detect(state) -> List[Event]`            | `RuleDetector`         | `ZScoreDetector`              | `DETECTOR_ENGINE`                          |
+| `RouteOptimizer` | `solve(problem) -> RoutingSolution`       | `CpuSolver` (OR-Tools) | `CuOptAdapter` (NVIDIA cuOpt) | `ROUTING_ENGINE` (+`CUOPT_ENDPOINT`)     |
+| `Forecaster`     | `forecast(history, horizon_h) -> dict`    | `EwmaForecaster`       | *(prophet chưa có)*         | `FORECASTER_ENGINE`                        |
+| `DecisionEngine` | `decide(state, events) -> List[Decision]` | `RuleBasedEngine`      | `ClaudeAgent` (Anthropic SDK) | `DECISION_ENGINE` (+`ANTHROPIC_API_KEY`) |
+| `Dispatcher`     | `apply(state, decision)`                  | `Dispatcher`           | —                              | luôn dùng                                  |
 
 ---
 
@@ -74,24 +74,24 @@ Triết lý "fallback an toàn": chọn engine cao cấp **chỉ khi** đủ đi
 
 [config/settings.py](../config/settings.py) — `Settings` là dataclass **frozen**; `load_settings(env)` đọc biến môi trường (mặc định `os.environ`).
 
-| Field | ENV | Mặc định | Ý nghĩa |
-|---|---|---|---|
-| `routing_engine` | `ROUTING_ENGINE` | `cpu` | `cpu` \| `cuopt` |
-| `decision_engine` | `DECISION_ENGINE` | `rule` | `rule` \| `claude` |
-| `detector_engine` | `DETECTOR_ENGINE` | `rule` | `rule` \| `zscore` |
-| `forecaster_engine` | `FORECASTER_ENGINE` | `ewma` | `ewma` \| `prophet`(chưa có) |
-| `seed` | `SEED` | `42` | RNG simulator (xác định, tái lập) |
-| `tick_minutes` | `TICK_MINUTES` | `5` | số phút mỗi tick |
-| `anthropic_api_key` | `ANTHROPIC_API_KEY` | `""` | bật ClaudeAgent |
-| `cuopt_endpoint` | `CUOPT_ENDPOINT` | `""` | bật CuOptAdapter (`host:port`) |
-| `auto_approve_delay_threshold_min` | `AUTO_APPROVE_DELAY_THRESHOLD_MIN` | `15` | ngưỡng tự duyệt REROUTE/RESCHEDULE |
-| `sla_critical_threshold_min` | `SLA_CRITICAL_THRESHOLD_MIN` | `30` | ngưỡng SLA nguy cấp |
-| `demand_noise` | `DEMAND_NOISE` | `0.3` | nhiễu nhu cầu (±) |
-| `restock_interval_min` | `RESTOCK_INTERVAL_MIN` | `240` | chu kỳ nhập kho |
-| `solver_time_limit_sec` | `SOLVER_TIME_LIMIT_SEC` | `0` | >0 bật metaheuristic OR-Tools |
-| `ewma_alpha` | `EWMA_ALPHA` | `0.3` | hệ số làm trơn EWMA |
-| `zscore_threshold` | `ZSCORE_THRESHOLD` | `2.0` | ngưỡng z-score báo surge |
-| `traffic_alert_factor` | `TRAFFIC_ALERT_FACTOR` | `3.0` | `traffic_factor` ≥ ngưỡng → TRAFFIC |
+| Field                                | ENV                                  | Mặc định | Ý nghĩa                                 |
+| ------------------------------------ | ------------------------------------ | ----------- | ----------------------------------------- |
+| `routing_engine`                   | `ROUTING_ENGINE`                   | `cpu`     | `cpu` \| `cuopt`                      |
+| `decision_engine`                  | `DECISION_ENGINE`                  | `rule`    | `rule` \| `claude`                    |
+| `detector_engine`                  | `DETECTOR_ENGINE`                  | `rule`    | `rule` \| `zscore`                    |
+| `forecaster_engine`                | `FORECASTER_ENGINE`                | `ewma`    | `ewma` \| `prophet`(chưa có)        |
+| `seed`                             | `SEED`                             | `42`      | RNG simulator (xác định, tái lập)    |
+| `tick_minutes`                     | `TICK_MINUTES`                     | `5`       | số phút mỗi tick                       |
+| `anthropic_api_key`                | `ANTHROPIC_API_KEY`                | `""`      | bật ClaudeAgent                          |
+| `cuopt_endpoint`                   | `CUOPT_ENDPOINT`                   | `""`      | bật CuOptAdapter (`host:port`)         |
+| `auto_approve_delay_threshold_min` | `AUTO_APPROVE_DELAY_THRESHOLD_MIN` | `15`      | ngưỡng tự duyệt REROUTE/RESCHEDULE    |
+| `sla_critical_threshold_min`       | `SLA_CRITICAL_THRESHOLD_MIN`       | `30`      | ngưỡng SLA nguy cấp                    |
+| `demand_noise`                     | `DEMAND_NOISE`                     | `0.3`     | nhiễu nhu cầu (±)                      |
+| `restock_interval_min`             | `RESTOCK_INTERVAL_MIN`             | `240`     | chu kỳ nhập kho                         |
+| `solver_time_limit_sec`            | `SOLVER_TIME_LIMIT_SEC`            | `0`       | >0 bật metaheuristic OR-Tools            |
+| `ewma_alpha`                       | `EWMA_ALPHA`                       | `0.3`     | hệ số làm trơn EWMA                   |
+| `zscore_threshold`                 | `ZSCORE_THRESHOLD`                 | `2.0`     | ngưỡng z-score báo surge               |
+| `traffic_alert_factor`             | `TRAFFIC_ALERT_FACTOR`             | `3.0`     | `traffic_factor` ≥ ngưỡng → TRAFFIC |
 
 ---
 
@@ -102,6 +102,7 @@ Triết lý "fallback an toàn": chọn engine cao cấp **chỉ khi** đủ đi
 **Trước vòng lặp:** nếu chưa có `plan` mà có đơn đang chờ → `plan_routes` (lập tuyến lần đầu).
 
 **Mỗi tick:**
+
 1. `simulator.tick(state)` — đẩy đồng hồ, sinh nhu cầu, nhập kho, cập nhật sự kiện thiếu hàng, **di chuyển + giao hàng** xe theo lịch.
 2. `_reconcile_detected(state, detector.detect(state))` — **cấp vòng đời cho sự kiện phát hiện**: điều kiện mới (vd cạnh ngập) được thêm **một lần** vào `state.events`; điều kiện `DET_*` đã biến mất thì đóng lại bằng `ended_at`. → một dòng ngập đứng yên là **một** sự kiện kéo dài, không phải sự kiện mới mỗi tick.
 3. **Khử trùng quyết định**: chỉ lấy các sự kiện đang active **chưa có** quyết định nào (`dedup theo event_id`). → chặn việc re-REROUTE mỗi tick (lỗi từng làm xe không bao giờ giao được).
@@ -188,6 +189,7 @@ streamlit run fleet/ui/app.py
 ```
 
 Đổi engine bằng biến môi trường, ví dụ:
+
 ```powershell
 $env:DETECTOR_ENGINE="zscore"; python -m fleet.loop
 $env:DECISION_ENGINE="claude"; $env:ANTHROPIC_API_KEY="sk-..."; python -m fleet.loop

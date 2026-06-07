@@ -14,6 +14,12 @@ Runbook này ưu tiên **chạy được, nhìn được, dừng đúng chỗ**.
 
 ## 3. Chuẩn bị môi trường
 
+Lưu ý trước khi chạy:
+
+- Không commit `.env`.
+- Nếu log được chia sẻ ra ngoài, không in `ANTHROPIC_API_KEY`.
+- Nên tạo venv mới để tránh lệch dependency giữa máy dev và máy ban tổ chức.
+
 ```powershell
 cd d:\hackathon
 python -m venv .venv
@@ -46,6 +52,12 @@ pip install cuopt-sh-client
 
 ## 5. Thiết lập env tối thiểu
 
+Lưu ý trước khi set env:
+
+- `CONSEQUENTIAL_DISRUPTIONS=1` là mặc định vận hành mới cho dataset/train.
+- `DECISION_ENGINE=nim` chỉ set khi endpoint NIM đã sống.
+- `ROUTING_ENGINE=cuopt` chỉ set khi endpoint cuOpt đã sống; nếu endpoint lỗi mà vẫn ép `cuopt`, runtime có thể fail.
+
 PowerShell:
 
 ```powershell
@@ -73,6 +85,12 @@ $env:NIM_MODEL="nvidia/llama-3.1-nemotron-nano-8b-v1"
 
 ## 6. Smoke test bắt buộc
 
+Lưu ý trước khi smoke:
+
+- Chạy smoke trước khi sinh dataset hoặc train.
+- Nếu smoke fail, không đi tiếp sang dataset/train.
+- Nên tạo `logs\` trước để không mất output chẩn đoán.
+
 ```powershell
 pytest tests/test_config.py tests/test_oracle.py tests/test_dataset.py tests/test_nim_agent.py tests/test_cuopt_adapter.py -q
 ```
@@ -91,11 +109,23 @@ mkdir logs -Force
 
 ## 7. Sinh dataset — mặc định dùng consequential path
 
+Lưu ý trước khi sinh dataset:
+
+- Không dùng path baseline cho train chính thức.
+- Kết quả probe nhỏ đã tốt, nhưng vẫn phải kiểm gate trên dataset thực tế vừa sinh.
+- Nếu định train DPO, vẫn phải sinh lại bằng `--consequential --dpo`.
+
 ```powershell
 python -m scripts.gen_dataset --seeds 20 --out data/sovereign-brain --consequential 2>&1 | Tee-Object -FilePath logs\gen-dataset.log
 ```
 
 ## 8. Gate tự động trước train
+
+Lưu ý trước khi chạy gate:
+
+- Gate fail thì dừng train ngay.
+- Không “đọc cảm tính” report; dùng exit code của lệnh gate.
+- Gate này cũng chặn trường hợp dùng nhầm baseline dataset.
 
 Lệnh kiểm gate:
 
@@ -118,11 +148,22 @@ Chỉ đi tiếp nếu:
 
 ## 10. Train nhanh
 
+Lưu ý trước khi train LoRA:
+
+- Chỉ train sau khi gate pass.
+- Dataset train chuẩn phải đến từ `--consequential`.
+- Nếu chạy trên máy GPU chung, luôn lưu log qua `Tee-Object`.
+
 ```powershell
 python -m scripts.train_lora --train data/sovereign-brain/train.jsonl --out data/adapters/sovereign-brain 2>&1 | Tee-Object -FilePath logs\train-lora.log
 ```
 
 Tuỳ chọn DPO:
+
+Lưu ý trước khi chạy DPO:
+
+- DPO chỉ có ý nghĩa nếu SFT dataset đã pass gate.
+- `prefs.jsonl` phải được sinh lại bằng `--consequential --dpo`, không dùng file cũ.
 
 ```powershell
 python -m scripts.gen_dataset --seeds 20 --out data/sovereign-brain --consequential --dpo 2>&1 | Tee-Object -FilePath logs\gen-dataset-dpo.log
@@ -130,6 +171,12 @@ python -m scripts.train_dpo --prefs data/sovereign-brain/prefs.jsonl --adapter d
 ```
 
 ## 11. Eval nhanh
+
+Lưu ý trước khi eval:
+
+- Eval chỉ đáng tin nếu `test.jsonl` đến từ consequential dataset.
+- Nếu NIM endpoint lỗi, eval NIM có thể rơi về fallback hoặc fail transport.
+- Baseline eval chỉ để đối chiếu, không phải bằng chứng duy nhất cho chất lượng fine-tune.
 
 Offline + online baseline:
 
