@@ -20,6 +20,7 @@ from fleet.forecast.holt_winters import HoltWintersForecaster
 from fleet.agent.rule_based import RuleBasedEngine
 from fleet.agent.scoring_engine import ScoringEngine
 from fleet.agent.claude_agent import ClaudeAgent
+from fleet.agent.nim_agent import NimAgent
 from fleet.dispatch.dispatcher import Dispatcher as DispatcherImpl
 
 
@@ -42,12 +43,15 @@ def build_components(settings) -> Components:
     else:
         optimizer = CpuSolver(settings)
 
-    # Decision engine. Claude (LLM) when requested AND an API key is configured;
-    # the scoring policy when requested; otherwise the rule-based engine so the
-    # system always runs.
-    if settings.decision_engine == "claude" and getattr(
+    # Decision engine. NIM (self-hosted LLM) when requested AND an endpoint is
+    # set; Claude (LLM) when requested AND an API key is configured; the scoring
+    # policy when requested; otherwise the rule-based engine so the system always
+    # runs.
+    if settings.decision_engine == "nim" and getattr(settings, "nim_endpoint", ""):
+        decision_engine: DecisionEngine = NimAgent(settings)
+    elif settings.decision_engine == "claude" and getattr(
             settings, "anthropic_api_key", ""):
-        decision_engine: DecisionEngine = ClaudeAgent(settings)
+        decision_engine = ClaudeAgent(settings)
     elif settings.decision_engine == "scoring":
         decision_engine = ScoringEngine(settings)
     else:

@@ -107,3 +107,20 @@ def test_factory_defaults_to_rule_engine():
     from config.settings import load_settings
     c = build_components(load_settings(env={}))
     assert isinstance(c.decision_engine, RuleBasedEngine)
+
+
+def test_factory_selects_nim_agent_when_endpoint_set():
+    from fleet.factory import build_components
+    from fleet.agent.nim_agent import NimAgent
+    from config.settings import load_settings
+    s = load_settings({"DECISION_ENGINE": "nim",
+                       "NIM_ENDPOINT": "http://localhost:8000/v1"})
+    assert isinstance(build_components(s).decision_engine, NimAgent)
+
+
+def test_factory_nim_without_endpoint_falls_back_to_rule():
+    from fleet.factory import build_components
+    from fleet.agent.rule_based import RuleBasedEngine
+    from config.settings import load_settings
+    s = load_settings({"DECISION_ENGINE": "nim"})   # engine requested, no endpoint
+    assert isinstance(build_components(s).decision_engine, RuleBasedEngine)
