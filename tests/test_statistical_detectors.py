@@ -59,3 +59,41 @@ def test_residual_quiet_when_demand_in_band():
         events = d.detect(state)
     c001 = [e for e in events if e.target == "C001"]
     assert c001 == []                               # no false positive on stable demand
+
+
+def test_cusum_conforms_to_protocol():
+    from fleet.detection.cusum import CusumDetector
+    assert isinstance(CusumDetector(load_settings()), Detector)
+
+
+def test_cusum_flags_sustained_upward_drift():
+    from fleet.detection.cusum import CusumDetector
+    s = load_settings(env={"DETECTOR_MIN_HISTORY": "6", "CUSUM_THRESHOLD": "4.0"})
+    d = CusumDetector(s)
+    state = build_sample_state()
+    # establish a stable baseline
+    for _ in range(10):
+        _set_orders(state, "C001", 10)
+        d.detect(state)
+    # then a sustained higher level (regime shift) -> CUSUM accumulates -> alarm
+    fired = False
+    for _ in range(10):
+        _set_orders(state, "C001", 16)
+        events = d.detect(state)
+        if any(e.id == "DET_CUSUM_C001" for e in events):
+            fired = True
+            break
+    assert fired
+
+
+def test_cusum_quiet_on_stable_demand():
+    from fleet.detection.cusum import CusumDetector
+    s = load_settings(env={"DETECTOR_MIN_HISTORY": "6"})
+    d = CusumDetector(s)
+    state = build_sample_state()
+    fired = False
+    for _ in range(30):
+        _set_orders(state, "C001", 10)
+        if any(e.id == "DET_CUSUM_C001" for e in d.detect(state)):
+            fired = True
+    assert not fired
