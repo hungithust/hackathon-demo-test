@@ -63,12 +63,15 @@ class WorldSimulator:
         self._restock_batch = None      # lazily snapshotted on first tick
         self._ar_state: Dict[str, float] = {}   # M-A: per-customer AR(1) state
         self._regime_until: Dict[str, "datetime"] = {}  # M-A: regime end clock
+        self._start_clock = None          # M-A: captured on first tick for trend
 
     def tick(self, state: WorldState) -> None:
         state.clock += timedelta(minutes=self.settings.tick_minutes)
         state.sim_tick += 1
         if self._restock_batch is None:
             self._restock_batch = dict(state.depot.inventory)
+        if self._start_clock is None:
+            self._start_clock = state.clock
         self._generate_demand(state)
         self._maybe_restock(state)
         self._update_shortage_events(state)
@@ -151,12 +154,18 @@ class WorldSimulator:
             return
         skus = sorted(state.depot.inventory.keys())
         hours_per_tick = self.settings.tick_minutes / 60.0
-        factor = _seasonal_factor(state.clock.hour)
-        noise = self.settings.demand_noise
+        intraday = _seasonal_factor(state.clock.hour)
+        weekly = _weekly_factor(state.clock.weekday(),
+                                self.settings.demand_weekend_factor)
+        days_elapsed = (
+            (state.clock - self._start_clock).total_seconds() / 86400.0
+            if self._start_clock is not None else 0.0)
+        trend = _trend_factor(days_elapsed, self.settings.demand_trend_per_day)
         for c in state.customers.values():
             base = _BASE_RATE_PER_HOUR.get(c.type, _DEFAULT_BASE_RATE)
-            expected = base * hours_per_tick * factor
-            expected *= self.rng.uniform(1.0 - noise, 1.0 + noise)
+            expected = base * hours_per_tick * intraday * weekly * trend
+            expected *= self._regime_multiplier(c.id, state.clock)
+            expected *= self._ar_multiplier(c.id)
             units = self._sample_units(expected)
             if units <= 0:
                 continue

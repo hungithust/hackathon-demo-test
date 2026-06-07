@@ -80,3 +80,32 @@ def test_regime_is_deterministic():
         seq2.append(s2._regime_multiplier("C1", clk))
         clk += timedelta(minutes=30)
     assert seq1 == seq2
+
+
+def _run_total_demand(env, n_ticks):
+    s = build_sample_state()
+    sim = WorldSimulator(load_settings(env=env))
+    totals = []
+    prev = 0
+    for _ in range(n_ticks):
+        sim.tick(s)
+        now = s.total_orders_pending()
+        totals.append(now - prev)   # demand added this tick (orders only grow until delivered)
+        prev = now
+    return s, totals
+
+
+def test_demand_uses_regime_when_forced():
+    # With regime forced on and a big factor, total demand exceeds a no-regime baseline.
+    base_s, _ = _run_total_demand({"SEED": "1", "REGIME_PROB": "0.0"}, 40)
+    promo_s, _ = _run_total_demand(
+        {"SEED": "1", "REGIME_PROB": "1.0", "REGIME_FACTOR": "3.0"}, 40)
+    assert promo_s.total_orders_pending() > base_s.total_orders_pending()
+
+
+def test_generate_demand_still_deterministic():
+    s1, _ = _run_total_demand({"SEED": "42"}, 20)
+    s2, _ = _run_total_demand({"SEED": "42"}, 20)
+    o1 = {cid: dict(c.orders) for cid, c in s1.customers.items()}
+    o2 = {cid: dict(c.orders) for cid, c in s2.customers.items()}
+    assert o1 == o2
