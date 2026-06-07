@@ -84,6 +84,21 @@ def test_weather_env_override():
     assert s.traffic_peak_factor == 2.2
 
 
+def test_holt_winters_defaults():
+    s = load_settings(env={})
+    assert s.hw_alpha == 0.3
+    assert s.hw_beta == 0.1
+    assert s.hw_gamma == 0.1
+    assert s.season_length == 24
+    assert s.pi_z == 1.96
+
+
+def test_holt_winters_env_override():
+    s = load_settings(env={"FORECASTER_ENGINE": "holt", "SEASON_LENGTH": "12"})
+    assert s.forecaster_engine == "holt"
+    assert s.season_length == 12
+
+
 def test_is_frozen():
     s = Settings()
     try:

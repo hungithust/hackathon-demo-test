@@ -36,6 +36,11 @@ class Settings:
     weather_rho: float = 0.8              # M-A2: AR(1) autocorrelation of the rain process
     weather_flood_threshold: float = 0.7  # M-A2: rain level at/above which flood-prone edges flood
     weather_flood_level: float = 0.5      # M-A2: flood depth applied while flooded (m)
+    hw_alpha: float = 0.3                 # M-B: Holt-Winters level smoothing
+    hw_beta: float = 0.1                  # M-B: Holt-Winters trend smoothing
+    hw_gamma: float = 0.1                 # M-B: Holt-Winters seasonal smoothing
+    season_length: int = 24               # M-B: seasonal period (in history steps)
+    pi_z: float = 1.96                    # M-B: prediction-interval z (1.96 = ~95%)
 
 
 def load_settings(env: Optional[Mapping[str, str]] = None) -> Settings:
@@ -72,4 +77,9 @@ def load_settings(env: Optional[Mapping[str, str]] = None) -> Settings:
         weather_rho=float(e.get("WEATHER_RHO", "0.8")),
         weather_flood_threshold=float(e.get("WEATHER_FLOOD_THRESHOLD", "0.7")),
         weather_flood_level=float(e.get("WEATHER_FLOOD_LEVEL", "0.5")),
+        hw_alpha=float(e.get("HW_ALPHA", "0.3")),
+        hw_beta=float(e.get("HW_BETA", "0.1")),
+        hw_gamma=float(e.get("HW_GAMMA", "0.1")),
+        season_length=int(e.get("SEASON_LENGTH", "24")),
+        pi_z=float(e.get("PI_Z", "1.96")),
     )
