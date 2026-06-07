@@ -75,3 +75,19 @@ def test_factory_defaults_to_ewma_forecaster():
     from fleet.forecast.ewma import EwmaForecaster
     c = build_components(load_settings(env={}))
     assert isinstance(c.forecaster, EwmaForecaster)
+
+
+def test_factory_selects_layered_detector():
+    from fleet.detection.composite import CompositeDetector
+    from fleet.factory import build_components
+    from config.settings import load_settings
+    c = build_components(load_settings(env={"DETECTOR_ENGINE": "layered"}))
+    assert isinstance(c.detector, CompositeDetector)
+
+
+def test_factory_defaults_to_rule_detector():
+    from fleet.detection.rules import RuleDetector
+    from fleet.factory import build_components
+    from config.settings import load_settings
+    c = build_components(load_settings(env={}))
+    assert isinstance(c.detector, RuleDetector)

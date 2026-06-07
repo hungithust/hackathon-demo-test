@@ -97,3 +97,19 @@ def test_cusum_quiet_on_stable_demand():
         if any(e.id == "DET_CUSUM_C001" for e in d.detect(state)):
             fired = True
     assert not fired
+
+
+def test_composite_concatenates_member_events():
+    from fleet.detection.composite import CompositeDetector
+    from fleet.detection.rules import RuleDetector
+    from fleet.detection.cusum import CusumDetector
+    s = load_settings(env={"DETECTOR_MIN_HISTORY": "6", "SEASON_LENGTH": "3"})
+    comp = CompositeDetector([
+        RuleDetector(s),
+        CusumDetector(s),
+    ])
+    state = build_sample_state()
+    # RuleDetector fires on the sample world's permanently FLOODED #2 edge each call
+    events = comp.detect(state)
+    assert any(e.id.startswith("DET_FLOOD_") for e in events)
+    assert isinstance(events, list)

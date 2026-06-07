@@ -10,6 +10,9 @@ from fleet.contracts.interfaces import (
 from fleet.simulator.engine import WorldSimulator
 from fleet.detection.rules import RuleDetector
 from fleet.detection.zscore import ZScoreDetector
+from fleet.detection.forecast_residual import ForecastResidualDetector
+from fleet.detection.cusum import CusumDetector
+from fleet.detection.composite import CompositeDetector
 from fleet.routing.cpu_solver import CpuSolver
 from fleet.routing.cuopt_adapter import CuOptAdapter
 from fleet.forecast.ewma import EwmaForecaster
@@ -46,19 +49,37 @@ def build_components(settings) -> Components:
     else:
         decision_engine = RuleBasedEngine()
 
-    # Detector: statistical z-score anomaly detector when requested, else the
-    # rule-based threshold detector (default).
-    if settings.detector_engine == "zscore":
-        detector: Detector = ZScoreDetector(settings)
-    else:
-        detector = RuleDetector(settings)
-
     # Forecaster: Holt-Winters (level+trend+seasonality+intervals) when requested,
     # else the default EWMA. (prophet remains a future, unimplemented slot.)
+    # Built before the detector so the residual detector can reuse it.
     if settings.forecaster_engine == "holt":
         forecaster: Forecaster = HoltWintersForecaster(settings)
     else:
         forecaster = EwmaForecaster(settings)
+
+    # The forecast-residual detector needs an interval-producing forecaster, so
+    # use the built one if it is Holt-Winters, else construct one regardless of
+    # FORECASTER_ENGINE (EWMA gives no prediction band).
+    interval_forecaster = (forecaster if isinstance(forecaster, HoltWintersForecaster)
+                           else HoltWintersForecaster(settings))
+
+    # Detector: statistical detectors (history-aware) when requested, the layered
+    # composite (ground-truth RuleDetector + residual + CUSUM), else the default
+    # rule-based threshold detector. zscore kept for back-compat.
+    if settings.detector_engine == "zscore":
+        detector: Detector = ZScoreDetector(settings)
+    elif settings.detector_engine == "residual":
+        detector = ForecastResidualDetector(settings, interval_forecaster)
+    elif settings.detector_engine == "cusum":
+        detector = CusumDetector(settings)
+    elif settings.detector_engine == "layered":
+        detector = CompositeDetector([
+            RuleDetector(settings),
+            ForecastResidualDetector(settings, interval_forecaster),
+            CusumDetector(settings),
+        ])
+    else:
+        detector = RuleDetector(settings)
 
     return Components(
         simulator=WorldSimulator(settings),
