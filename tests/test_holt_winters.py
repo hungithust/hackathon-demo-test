@@ -29,3 +29,23 @@ def test_short_history_warms_up_flat_with_interval():
 def test_nonpositive_horizon_returns_empty_forecast():
     out = _f().forecast([1.0, 2.0, 3.0], horizon_h=0)
     assert out["forecast"] == []
+
+
+def test_trend_series_forecasts_upward():
+    # strictly increasing series, season_length small -> forecast keeps rising
+    hist = [float(i) for i in range(24)]      # 0,1,2,...,23
+    out = _f({"SEASON_LENGTH": "4"}).forecast(hist, horizon_h=4)
+    assert out["trend"] > 0
+    assert out["forecast"][-1] > out["forecast"][0]
+    assert out["forecast"][0] > hist[-1] - 5    # continues near the last value, not flat
+
+
+def test_seasonal_pattern_is_reproduced():
+    # repeating season [2, 10, 4] over 6 cycles; m=3
+    base = [2.0, 10.0, 4.0]
+    hist = base * 6
+    out = _f({"SEASON_LENGTH": "3"}).forecast(hist, horizon_h=3)
+    fc = out["forecast"]
+    # the next step continues the cycle: peak (10) should be the largest of the 3
+    assert max(fc) == fc[1]
+    assert fc[1] > fc[0] and fc[1] > fc[2]

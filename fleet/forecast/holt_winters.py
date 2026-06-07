@@ -52,4 +52,28 @@ class HoltWintersForecaster:
         return self._fit(y, n, m, h)
 
     def _fit(self, y, n, m, h):
-        raise NotImplementedError   # filled in Task 3
+        # additive initialization from the first two seasons
+        level = _mean(y[:m])
+        trend = (_mean(y[m:2 * m]) - _mean(y[:m])) / m
+        season = [y[i] - level for i in range(m)]
+        residuals: List[float] = []
+        for t in range(n):
+            s_idx = t % m
+            seasonal = season[s_idx]
+            if t >= m:                                  # collect one-step residuals
+                residuals.append(y[t] - (level + trend + seasonal))
+            last_level = level
+            level = self.alpha * (y[t] - seasonal) + (1 - self.alpha) * (level + trend)
+            trend = self.beta * (level - last_level) + (1 - self.beta) * trend
+            season[s_idx] = self.gamma * (y[t] - level) + (1 - self.gamma) * seasonal
+        sigma = _std(residuals)
+        band = self.z * sigma
+        forecast, lower, upper = [], [], []
+        for k in range(1, h + 1):
+            seasonal = season[(n + k - 1) % m]
+            point = level + k * trend + seasonal
+            forecast.append(point)
+            lower.append(point - band)
+            upper.append(point + band)
+        return {"level": level, "trend": trend, "sigma": sigma,
+                "forecast": forecast, "lower": lower, "upper": upper}
