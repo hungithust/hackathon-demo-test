@@ -172,6 +172,15 @@ class WorldSimulator:
         self._rain = max(0.0, min(1.0, rho * self._rain + (1.0 - rho) * shock))
         return self._rain
 
+    def _update_traffic(self, state: WorldState) -> None:
+        """Set rush-hour congestion on OPEN edges only; injected/disrupted edges
+        (BLOCKED/FLOODED/CONGESTED) keep their values (§3.2 injection override)."""
+        factor = _traffic_factor_for_hour(
+            state.clock.hour, self.settings.traffic_peak_factor)
+        for edge in state.road_graph.edges.values():
+            if edge.status == EdgeStatus.OPEN:
+                edge.traffic_factor = factor
+
     def _generate_demand(self, state: WorldState) -> None:
         if not state.depot.inventory:
             return

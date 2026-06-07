@@ -39,3 +39,17 @@ def test_weather_rng_is_independent_of_demand_rng():
     sim2._step_rain(); sim2._step_rain(); sim2._step_rain()
     after = sim2.rng.random()
     assert before == after        # demand rng stream unchanged by rain steps
+
+
+def test_update_traffic_only_touches_open_edges():
+    s = build_sample_state()
+    sim = WorldSimulator(load_settings(env={"TRAFFIC_PEAK_FACTOR": "1.8"}))
+    # disrupt one edge (presenter injection): congested with a big factor
+    s.road_graph.get_edge("DEPOT->C001").status = EdgeStatus.CONGESTED
+    s.road_graph.get_edge("DEPOT->C001").traffic_factor = 4.0
+    s.clock = s.clock.replace(hour=8)            # morning rush
+    sim._update_traffic(s)
+    # an OPEN edge gets the rush-hour factor
+    assert s.road_graph.get_edge("DEPOT->C002").traffic_factor == 1.8
+    # the injected CONGESTED edge is left alone (override respected)
+    assert s.road_graph.get_edge("DEPOT->C001").traffic_factor == 4.0
