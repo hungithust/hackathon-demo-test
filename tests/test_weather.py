@@ -82,3 +82,39 @@ def test_weather_does_not_touch_injected_flood_on_other_edges():
     sim._update_weather(s)
     assert inj.status == EdgeStatus.FLOODED       # injected edge untouched
     assert inj.flood_level == 0.8
+
+
+def test_gate_off_means_no_edge_mutation():
+    s = build_sample_state()
+    sim = WorldSimulator(load_settings(env={"ENABLE_WEATHER": "0"}))
+    before = {eid: (e.status, e.traffic_factor, e.flood_level)
+              for eid, e in s.road_graph.edges.items()}
+    for _ in range(20):
+        sim.tick(s)
+    after = {eid: (e.status, e.traffic_factor, e.flood_level)
+             for eid, e in s.road_graph.edges.items()}
+    assert before == after        # weather off => edges never mutated by the sim
+
+
+def test_gate_on_eventually_mutates_traffic():
+    s = build_sample_state()
+    sim = WorldSimulator(load_settings(env={"ENABLE_WEATHER": "1", "SEED": "3"}))
+    open_edge = "DEPOT->C002"
+    seen = set()
+    for _ in range(60):
+        sim.tick(s)
+        seen.add(round(s.road_graph.get_edge(open_edge).traffic_factor, 3))
+    assert len(seen) > 1          # traffic_factor varies across the day (rush vs off-peak)
+
+
+def test_demand_stream_identical_with_weather_on_or_off():
+    s_off = build_sample_state()
+    s_on = build_sample_state()
+    sim_off = WorldSimulator(load_settings(env={"SEED": "42", "ENABLE_WEATHER": "0"}))
+    sim_on = WorldSimulator(load_settings(env={"SEED": "42", "ENABLE_WEATHER": "1"}))
+    for _ in range(15):
+        sim_off.tick(s_off)
+        sim_on.tick(s_on)
+    o_off = {cid: dict(c.orders) for cid, c in s_off.customers.items()}
+    o_on = {cid: dict(c.orders) for cid, c in s_on.customers.items()}
+    assert o_off == o_on          # separate weather rng => demand untouched by weather

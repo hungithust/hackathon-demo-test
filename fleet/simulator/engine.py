@@ -87,6 +87,10 @@ class WorldSimulator:
             self._restock_batch = dict(state.depot.inventory)
         if self._start_clock is None:
             self._start_clock = state.clock
+        if self.settings.enable_weather:
+            self._step_rain()
+            self._update_traffic(state)
+            self._update_weather(state)
         self._generate_demand(state)
         self._maybe_restock(state)
         self._update_shortage_events(state)
