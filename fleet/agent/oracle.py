@@ -7,7 +7,9 @@ Pure CPU, deterministic, no GPU/network — safe in the test suite."""
 import copy
 from typing import Callable, Optional
 
-from fleet.contracts.state import WorldState, Decision
+from fleet.contracts.state import (
+    WorldState, Decision, DecisionAction, DecisionEngine, Event,
+)
 from fleet.dispatch.dispatcher import Dispatcher, RESOLVE_ACTIONS
 from fleet.agent.scoring_engine import _Weights
 
@@ -65,3 +67,30 @@ def roll_forward(simulator, state: WorldState, decision: Decision, horizon: int,
     for _ in range(horizon):
         sim_c.tick(state_c)
     return state_c
+
+
+def grade_action(simulator, state: WorldState, event: Event,
+                 action: DecisionAction, settings, horizon: Optional[int] = None,
+                 resolve: Optional[Callable[[WorldState], None]] = None) -> float:
+    """Realized cost of taking `action` in response to `event`. Builds a probe
+    Decision, rolls it forward, and grades the outcome. Horizon defaults to
+    settings.oracle_horizon_ticks."""
+    h = settings.oracle_horizon_ticks if horizon is None else horizon
+    probe = Decision(
+        id="ORACLE_PROBE", timestamp=state.clock, event_id=event.id, action=action,
+        engine=DecisionEngine.RULE_BASED, description=f"oracle probe {action.value}")
+    rolled = roll_forward(simulator, state, probe, h, resolve)
+    return realized_cost(rolled, _Weights(settings))
+
+
+def best_action(simulator, state: WorldState, event: Event, candidates, settings,
+                horizon: Optional[int] = None,
+                resolve: Optional[Callable[[WorldState], None]] = None):
+    """Grade every candidate and return (best_action, best_cost, scored) where
+    `scored` is the full [(action, cost), ...] list sorted by (cost, action.value)."""
+    scored = sorted(
+        ((a, grade_action(simulator, state, event, a, settings, horizon, resolve))
+         for a in candidates),
+        key=lambda t: (t[1], t[0].value))
+    best, cost = scored[0]
+    return best, cost, scored

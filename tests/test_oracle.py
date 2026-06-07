@@ -79,3 +79,51 @@ def test_roll_forward_is_deterministic_and_pure():
     assert state.clock == before_clock                     # original state untouched
     assert state.sim_tick == 0                             # original simulator state untouched
     assert dec.executed_at is None                         # caller's decision untouched
+
+
+def test_best_action_is_sorted_and_deterministic():
+    from fleet.contracts.state import (
+        Event, EventType, EventSeverity, DecisionAction,
+    )
+    from fleet.scenarios import build_sample_state
+    from fleet.simulator.engine import WorldSimulator
+    from fleet.agent.scoring_engine import candidate_actions
+    from fleet.agent.oracle import best_action
+
+    settings = load_settings({})
+    state = build_sample_state()
+    sim = WorldSimulator(settings)
+    evt = Event(id="EVT_X", event_type=EventType.INVENTORY_SHORTAGE,
+                target="SKU001", severity=EventSeverity.HIGH, started_at=state.clock)
+    state.events.append(evt)
+    cands = candidate_actions(evt.event_type)
+
+    best, cost, scored = best_action(sim, state, evt, cands, settings, horizon=6)
+
+    assert best in cands
+    assert [a for a, _ in scored] == sorted(  # min cost, stable tie-break by action.value
+        (a for a in cands),
+        key=lambda a: (dict((aa, cc) for aa, cc in scored)[a], a.value))
+    assert scored[0][1] <= scored[-1][1]
+    # determinism: identical inputs -> identical pick + cost
+    best2, cost2, _ = best_action(sim, state, evt, cands, settings, horizon=6)
+    assert (best, cost) == (best2, cost2)
+
+
+def test_grade_action_defaults_horizon_from_settings():
+    from fleet.contracts.state import (
+        Event, EventType, EventSeverity, DecisionAction,
+    )
+    from fleet.scenarios import build_sample_state
+    from fleet.simulator.engine import WorldSimulator
+    from fleet.agent.oracle import grade_action
+
+    settings = load_settings({"ORACLE_HORIZON_TICKS": "3"})
+    state = build_sample_state()
+    sim = WorldSimulator(settings)
+    evt = Event(id="EVT_Y", event_type=EventType.DEMAND_SURGE, target="C001",
+                severity=EventSeverity.MEDIUM, started_at=state.clock)
+    state.events.append(evt)
+    # no horizon arg -> uses settings.oracle_horizon_ticks; returns a finite cost
+    cost = grade_action(sim, state, evt, DecisionAction.REPRIORITIZE, settings)
+    assert isinstance(cost, float) and cost >= 0.0
