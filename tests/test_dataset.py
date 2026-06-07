@@ -150,3 +150,43 @@ def test_iter_examples_spans_all_event_specs_per_seed():
     seen = {evt.event_type for _seed, (_sim, _state, evt)
             in iter_examples(settings, n_seeds=1, optimizer=optimizer)}
     assert seen == {spec[0] for spec in DATASET_EVENT_SPECS}
+
+
+def test_split_by_seed_has_no_seed_leak():
+    from fleet.agent.dataset import split_by_seed
+    records = [(s, {"row": s}) for s in [1, 1, 2, 2, 3, 3, 4, 4]]
+    train, test = split_by_seed(records, holdout_frac=0.25)
+    train_seeds = {r["row"] for r in train}
+    test_seeds = {r["row"] for r in test}
+    assert test_seeds and not (train_seeds & test_seeds)   # disjoint -> no scenario leak
+    assert test_seeds == {4}                                # last 25% of 4 seeds = seed 4
+
+
+def test_batch_reasoning_falls_back_to_templated_per_missing_id():
+    from fleet.contracts.state import Event, EventType, EventSeverity, DecisionAction
+    from fleet.agent.dataset import batch_reasoning, templated_reasoning
+    evt = Event(id="E1", event_type=EventType.DEMAND_SURGE, target="C001",
+                severity=EventSeverity.MEDIUM, started_at=_BASE)
+    scored = [(DecisionAction.REPRIORITIZE, 10.0), (DecisionAction.REALLOCATE, 30.0)]
+    from fleet.scenarios import build_sample_state
+    state = build_sample_state()
+    examples = [
+        {"custom_id": "ex-0", "state": state, "event": evt,
+         "action": DecisionAction.REPRIORITIZE, "scored": scored},
+        {"custom_id": "ex-1", "state": state, "event": evt,
+         "action": DecisionAction.REPRIORITIZE, "scored": scored},
+    ]
+
+    # injected transport: only ex-0 gets a teacher reasoning
+    def fake_submit(reqs):
+        assert {r["custom_id"] for r in reqs} == {"ex-0", "ex-1"}
+        return {"ex-0": "teacher says reprioritize."}
+
+    out = batch_reasoning(examples, submit=fake_submit)
+    assert out["ex-0"] == "teacher says reprioritize."
+    assert out["ex-1"] == templated_reasoning(evt, scored)   # fallback
+
+    # submit=None -> fully $0 templated path
+    out0 = batch_reasoning(examples, submit=None)
+    assert out0 == {"ex-0": templated_reasoning(evt, scored),
+                    "ex-1": templated_reasoning(evt, scored)}

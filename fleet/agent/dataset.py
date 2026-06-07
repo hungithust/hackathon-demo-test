@@ -132,3 +132,87 @@ def iter_examples(settings, n_seeds: int, optimizer, warmup_ticks: int = 6):
     for seed in range(settings.seed, settings.seed + n_seeds):
         for spec in DATASET_EVENT_SPECS:
             yield seed, make_example(seed, spec, settings, optimizer, warmup_ticks)
+
+
+_REASONING_SYSTEM = (
+    "You justify dispatch decisions for a real-time delivery-fleet system. Given a "
+    "disruption event and the action that was chosen, write one or two sentences "
+    "explaining why that action best protects on-time delivery and safety. Justify "
+    "the GIVEN action; do not propose a different one.")
+
+
+def split_by_seed(records, holdout_frac: float):
+    """Split [(seed, record), ...] into (train, test) so no seed appears in both —
+    the last ceil(holdout_frac * n_seeds) distinct seeds become the test set."""
+    seeds = sorted({s for s, _ in records})
+    n_test = max(1, round(holdout_frac * len(seeds))) if seeds else 0
+    test_seeds = set(seeds[len(seeds) - n_test:]) if n_test else set()
+    train = [r for s, r in records if s not in test_seeds]
+    test = [r for s, r in records if s in test_seeds]
+    return train, test
+
+
+def _reasoning_prompt(state: WorldState, event: Event, action: DecisionAction) -> str:
+    _system, user = build_messages(state, event)
+    return (user + f"\n\nThe chosen action is: {action.value}. "
+                   "Justify it in one or two sentences.")
+
+
+def build_reasoning_requests(examples):
+    """Transport-agnostic request descriptors (plain dicts) for the Batch transport."""
+    return [{"custom_id": e["custom_id"], "system": _REASONING_SYSTEM,
+             "user": _reasoning_prompt(e["state"], e["event"], e["action"])}
+            for e in examples]
+
+
+def batch_reasoning(examples, submit=None) -> dict:
+    """Reasoning per example custom_id. `submit(requests) -> {custom_id: reasoning}`
+    is injected (Sonnet Batch in production); any id the transport doesn't return —
+    or submit=None — falls back to the $0 templated reasoning."""
+    raw = {}
+    if submit is not None and examples:
+        raw = submit(build_reasoning_requests(examples)) or {}
+    out = {}
+    for e in examples:
+        cid = e["custom_id"]
+        out[cid] = raw.get(cid) or templated_reasoning(e["event"], e["scored"])
+    return out
+
+
+def default_batch_submit(settings):
+    """Lazy real transport: Sonnet 4.6 via the Message Batches API (thinking off,
+    guided-JSON reasoning). Imported here so the suite never needs anthropic."""
+    import json
+    import time
+    import anthropic
+    from anthropic.types.message_create_params import MessageCreateParamsNonStreaming
+    from anthropic.types.messages.batch_create_params import Request
+
+    client = anthropic.Anthropic(api_key=(settings.anthropic_api_key or None))
+    schema = {"type": "object", "properties": {"reasoning": {"type": "string"}},
+              "required": ["reasoning"], "additionalProperties": False}
+
+    def submit(reqs):
+        batch = client.messages.batches.create(requests=[
+            Request(custom_id=r["custom_id"],
+                    params=MessageCreateParamsNonStreaming(
+                        model="claude-sonnet-4-6", max_tokens=256,
+                        thinking={"type": "disabled"}, system=r["system"],
+                        output_config={"format": {"type": "json_schema",
+                                                   "schema": schema}},
+                        messages=[{"role": "user", "content": r["user"]}]))
+            for r in reqs])
+        while client.messages.batches.retrieve(batch.id).processing_status != "ended":
+            time.sleep(30)
+        out = {}
+        for res in client.messages.batches.results(batch.id):
+            if res.result.type == "succeeded":
+                msg = res.result.message
+                text = next((b.text for b in msg.content if b.type == "text"), "")
+                try:
+                    out[res.custom_id] = json.loads(text).get("reasoning", "")
+                except Exception:
+                    pass
+        return out
+
+    return submit
