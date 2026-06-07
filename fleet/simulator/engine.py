@@ -5,6 +5,7 @@ Vehicle MOVEMENT is intentionally NOT here: realistic movement needs shortest-pa
 demand grows, depot stock is restocked, shortages surface — so the detector and
 agent have something real to react to. Fully deterministic given settings.seed."""
 
+import math
 import random
 from datetime import timedelta
 from typing import Dict
@@ -60,6 +61,8 @@ class WorldSimulator:
         self._evt_seq = 0
         self._mins_since_restock = 0
         self._restock_batch = None      # lazily snapshotted on first tick
+        self._ar_state: Dict[str, float] = {}   # M-A: per-customer AR(1) state
+        self._regime_until: Dict[str, "datetime"] = {}  # M-A: regime end clock
 
     def tick(self, state: WorldState) -> None:
         state.clock += timedelta(minutes=self.settings.tick_minutes)
@@ -116,6 +119,19 @@ class WorldSimulator:
         """Stochastic rounding: integer demand whose mean equals `expected`."""
         base = int(expected)
         return base + (1 if self.rng.random() < (expected - base) else 0)
+
+    def _ar_multiplier(self, cid: str) -> float:
+        """AR(1) autocorrelated, mean~1, strictly-positive demand multiplier.
+
+        a_t = rho*a_{t-1} + sqrt(1-rho^2)*eps;  multiplier = exp(sigma*a_t - sigma^2/2).
+        The lognormal mean-correction keeps the long-run mean ~= 1.0."""
+        rho = self.settings.demand_ar_rho
+        sigma = self.settings.demand_ar_sigma
+        prev = self._ar_state.get(cid, 0.0)
+        eps = self.rng.gauss(0.0, 1.0)
+        a = rho * prev + math.sqrt(max(0.0, 1.0 - rho * rho)) * eps
+        self._ar_state[cid] = a
+        return math.exp(sigma * a - 0.5 * sigma * sigma)
 
     def _generate_demand(self, state: WorldState) -> None:
         if not state.depot.inventory:

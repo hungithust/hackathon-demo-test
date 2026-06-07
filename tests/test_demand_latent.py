@@ -1,6 +1,7 @@
 from datetime import datetime
 
-from fleet.simulator.engine import _weekly_factor, _trend_factor
+from config.settings import load_settings
+from fleet.simulator.engine import _weekly_factor, _trend_factor, WorldSimulator
 
 
 def test_weekly_factor_weekend_lower_than_weekday():
@@ -20,3 +21,35 @@ def test_trend_factor_grows_with_days():
 
 def test_trend_factor_never_negative():
     assert _trend_factor(100.0, -0.05) == 0.0    # clamped at 0, not negative
+
+
+def _ar_series(sim, cid, n):
+    # underlying AR state is what we test for autocorrelation
+    out = []
+    for _ in range(n):
+        sim._ar_multiplier(cid)
+        out.append(sim._ar_state[cid])
+    return out
+
+
+def test_ar_noise_is_positively_autocorrelated():
+    sim = WorldSimulator(load_settings(env={"DEMAND_AR_RHO": "0.9", "SEED": "7"}))
+    xs = _ar_series(sim, "C1", 400)
+    a = xs[:-1]
+    b = xs[1:]
+    ma = sum(a) / len(a)
+    mb = sum(b) / len(b)
+    cov = sum((x - ma) * (y - mb) for x, y in zip(a, b))
+    va = sum((x - ma) ** 2 for x in a) ** 0.5
+    vb = sum((y - mb) ** 2 for y in b) ** 0.5
+    corr = cov / (va * vb)
+    assert corr > 0.5            # rho=0.9 => strongly positively autocorrelated
+
+
+def test_ar_multiplier_is_positive_and_deterministic():
+    s1 = WorldSimulator(load_settings(env={"SEED": "42"}))
+    s2 = WorldSimulator(load_settings(env={"SEED": "42"}))
+    seq1 = [s1._ar_multiplier("C1") for _ in range(20)]
+    seq2 = [s2._ar_multiplier("C1") for _ in range(20)]
+    assert seq1 == seq2                 # same seed => identical
+    assert all(m > 0 for m in seq1)     # multiplier always positive
