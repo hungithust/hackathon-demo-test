@@ -48,6 +48,7 @@ class Settings:
     score_w_delay: float = 1.0            # M-D: weight on added delay minutes
     score_w_drop: float = 50.0            # M-D: weight on priority-weighted dropped orders
     enable_proactive: bool = False        # M-D: emit proactive shortfall decisions
+    oracle_horizon_ticks: int = 12        # M-A(SBv2): ticks to roll a candidate action forward before grading
 
 
 def load_settings(env: Optional[Mapping[str, str]] = None) -> Settings:
@@ -96,4 +97,5 @@ def load_settings(env: Optional[Mapping[str, str]] = None) -> Settings:
         score_w_delay=float(e.get("SCORE_W_DELAY", "1.0")),
         score_w_drop=float(e.get("SCORE_W_DROP", "50.0")),
         enable_proactive=e.get("ENABLE_PROACTIVE", "0") in ("1", "true", "True"),
+        oracle_horizon_ticks=int(e.get("ORACLE_HORIZON_TICKS", "12")),
     )

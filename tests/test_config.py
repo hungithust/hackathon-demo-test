@@ -133,3 +133,9 @@ def test_is_frozen():
         raise AssertionError("Settings should be immutable")
     except Exception:
         pass
+
+
+def test_oracle_horizon_default_and_override():
+    from config.settings import load_settings
+    assert load_settings({}).oracle_horizon_ticks == 12
+    assert load_settings({"ORACLE_HORIZON_TICKS": "6"}).oracle_horizon_ticks == 6
