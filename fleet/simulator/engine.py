@@ -26,6 +26,16 @@ def _seasonal_factor(hour: int) -> float:
     return 0.4
 
 
+def _weekly_factor(weekday: int, weekend_factor: float) -> float:
+    """Weekly seasonality: weekends (Sat=5, Sun=6) scaled by weekend_factor."""
+    return weekend_factor if weekday >= 5 else 1.0
+
+
+def _trend_factor(days_elapsed: float, trend_per_day: float) -> float:
+    """Slow multiplicative trend over elapsed sim-days, floored at 0."""
+    return max(0.0, 1.0 + trend_per_day * days_elapsed)
+
+
 _BASE_RATE_PER_HOUR = {
     "supermarket": 8.0,
     "market": 12.0,
