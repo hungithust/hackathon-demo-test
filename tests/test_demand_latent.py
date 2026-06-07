@@ -10,3 +10,13 @@ def test_weekly_factor_weekend_lower_than_weekday():
     assert _weekly_factor(monday.weekday(), 0.7) == 1.0
     assert _weekly_factor(saturday.weekday(), 0.7) == 0.7
     assert _weekly_factor(monday.weekday(), 0.7) > _weekly_factor(saturday.weekday(), 0.7)
+
+
+def test_trend_factor_grows_with_days():
+    assert _trend_factor(0.0, 0.05) == 1.0
+    assert _trend_factor(2.0, 0.05) == 1.1       # 1 + 0.05*2
+    assert _trend_factor(10.0, 0.05) > _trend_factor(1.0, 0.05)
+
+
+def test_trend_factor_never_negative():
+    assert _trend_factor(100.0, -0.05) == 0.0    # clamped at 0, not negative
