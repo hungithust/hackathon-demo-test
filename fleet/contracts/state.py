@@ -50,6 +50,7 @@ class DecisionEngine(str, Enum):
     RULE_BASED = "rule_based"
     CLAUDE = "claude"
     HUMAN = "human"
+    LOCAL_NIM = "local_nim"
 
 
 class DecisionAction(str, Enum):
