@@ -53,3 +53,13 @@ def test_build_dataset_dpo_writes_prefs(tmp_path):
     assert set(r["chosen"]) == {"action", "reasoning", "added_delay_min"}
     assert r["chosen"]["action"] != r["rejected"]["action"]   # informative pair
     assert out["n_prefs"] == len(rows)
+
+
+def test_build_dataset_consequential_improves_multi_event_coverage(tmp_path):
+    from scripts.gen_dataset import build_dataset
+    settings = load_settings({"ORACLE_HORIZON_TICKS": "12", "ORACLE_MIN_GAP": "1.0"})
+    out = build_dataset(settings, n_seeds=2, out_dir=str(tmp_path),
+                        holdout_frac=0.5, use_teacher=False, consequential=True)
+    assert out["consequential"] is True
+    assert len(out["event_types"]) >= 4
+    assert out["informative_fraction"] > 0.5

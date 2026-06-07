@@ -114,6 +114,7 @@ class CustomerProfile:
     orders: Dict[str, int]
     time_window: TimeWindow
     priority: int = 4              # 1 = most urgent .. 4 = least urgent (see PriorityLevel)
+    service_time_min: float = 10.0
     sla_deadline: Optional[datetime] = None
     contact_name: str = ""
     contact_phone: str = ""

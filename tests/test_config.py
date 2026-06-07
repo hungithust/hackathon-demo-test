@@ -84,6 +84,13 @@ def test_weather_env_override():
     assert s.traffic_peak_factor == 2.2
 
 
+def test_travel_time_defaults_and_override():
+    s = load_settings(env={})
+    assert s.enable_travel_time is False
+    s2 = load_settings(env={"ENABLE_TRAVEL_TIME": "1"})
+    assert s2.enable_travel_time is True
+
+
 def test_holt_winters_defaults():
     s = load_settings(env={})
     assert s.hw_alpha == 0.3

@@ -5,17 +5,18 @@ train/serve-parity JSONL. Pure CPU; the Batch transport is injected so the test
 suite never imports anthropic or touches the network."""
 
 from dataclasses import replace
+from datetime import timedelta
 
 from fleet.contracts.state import (
     WorldState, Event, DecisionAction, Decision, DecisionEngine,
-    EventType, EventSeverity,
+    EventType, EventSeverity, EdgeStatus, VehicleStatus,
 )
 from fleet.agent.claude_agent import build_messages
 from fleet.agent.scoring_engine import candidate_actions, _Weights
 from fleet.agent.oracle import roll_forward, realized_cost
 from fleet.scenarios import build_sample_state
 from fleet.simulator.engine import WorldSimulator
-from fleet.routing.planner import plan_routes
+from fleet.routing.planner import plan_routes, reroute
 
 
 def realized_delay_minutes(state: WorldState) -> float:
@@ -99,6 +100,15 @@ DATASET_EVENT_SPECS = [
     (EventType.VEHICLE_BREAKDOWN, EventSeverity.CRITICAL, "vehicle"),
 ]
 
+DISRUPTED_EVENT_SPECS = [
+    (EventType.TRAFFIC, EventSeverity.MEDIUM, "customer"),
+    (EventType.FLOODED_AREA, EventSeverity.HIGH, "customer"),
+    (EventType.DEMAND_SURGE, EventSeverity.MEDIUM, "customer"),
+    (EventType.URGENT_ORDER, EventSeverity.HIGH, "customer"),
+    (EventType.INVENTORY_SHORTAGE, EventSeverity.HIGH, "sku"),
+    (EventType.VEHICLE_BREAKDOWN, EventSeverity.CRITICAL, "customer"),
+]
+
 
 def _pick_target(state: WorldState, kind: str) -> str:
     """Deterministic target for an injected event (first id in sorted order)."""
@@ -111,6 +121,26 @@ def _pick_target(state: WorldState, kind: str) -> str:
     if kind == "vehicle":
         return sorted(state.vehicles)[0]
     raise ValueError(f"unknown target kind: {kind}")
+
+
+def _latest_planned_customer(state: WorldState) -> str:
+    planned = [
+        (stop.planned_arrival, stop.customer_id)
+        for route in state.plan.values() for stop in route.stops
+        if stop.actual_arrival is None
+    ]
+    if planned:
+        planned.sort()
+        return planned[-1][1]
+    return sorted(state.customers)[-1]
+
+
+def _pick_disrupted_target(state: WorldState, event_type: EventType, kind: str) -> str:
+    if kind != "customer":
+        return _pick_target(state, kind)
+    if event_type in (EventType.DEMAND_SURGE, EventType.URGENT_ORDER, EventType.VEHICLE_BREAKDOWN):
+        return _latest_planned_customer(state)
+    return _pick_target(state, kind)
 
 
 def make_example(seed: int, spec, settings, optimizer, warmup_ticks: int = 6):
@@ -132,6 +162,89 @@ def iter_examples(settings, n_seeds: int, optimizer, warmup_ticks: int = 6):
     for seed in range(settings.seed, settings.seed + n_seeds):
         for spec in DATASET_EVENT_SPECS:
             yield seed, make_example(seed, spec, settings, optimizer, warmup_ticks)
+
+
+def _critical_edges(state: WorldState, customer_id: str):
+    """All direct DEPOT->customer edges, including parallel links. Blocking all of
+    them forces the detour path if one exists, yielding a measurable trade-off."""
+    return sorted(
+        e.id for e in state.road_graph.edges_between("DEPOT", customer_id))
+
+
+def _force_inventory_shortage(state: WorldState, sku: str) -> None:
+    pending = sum(c.orders.get(sku, 0) for c in state.customers.values())
+    state.depot.inventory[sku] = max(0, pending - 1)
+
+
+def _surge_customer(cust, qty: int = 40, sku: str = "SKU001") -> None:
+    cust.orders[sku] = cust.orders.get(sku, 0) + qty
+
+
+def _tighten_window(cust, clock, end_after_min: int = 20) -> None:
+    cust.time_window.start = clock
+    cust.time_window.end = clock + timedelta(minutes=end_after_min)
+
+
+def _break_committed_vehicle(state: WorldState, customer_id: str):
+    for vid, route in state.plan.items():
+        if any(s.customer_id == customer_id and s.actual_arrival is None for s in route.stops):
+            state.vehicles[vid].status = VehicleStatus.BROKEN
+            return vid
+    vid = sorted(state.vehicles)[0]
+    state.vehicles[vid].status = VehicleStatus.BROKEN
+    return vid
+
+
+def make_disrupted_example(seed: int, spec, settings, optimizer, warmup_ticks: int = 6):
+    """M-F path: after planning + warmup, injure the world so the event creates a
+    real trade-off rather than just an inert Event marker."""
+    s = replace(settings, seed=seed)
+    state = build_sample_state()
+    sim = WorldSimulator(s)
+    plan_routes(state, optimizer)
+    for _ in range(warmup_ticks):
+        sim.tick(state)
+
+    event_type, severity, kind = spec
+    target = _pick_disrupted_target(state, event_type, kind)
+
+    if event_type == EventType.TRAFFIC:
+        for edge_id in _critical_edges(state, target):
+            state.road_graph.edges[edge_id].status = EdgeStatus.BLOCKED
+        event = sim.inject_event(state, event_type, target, severity)
+    elif event_type == EventType.FLOODED_AREA:
+        for edge_id in _critical_edges(state, target):
+            edge = state.road_graph.edges[edge_id]
+            edge.status = EdgeStatus.FLOODED
+            edge.flood_level = 0.6
+        event = sim.inject_event(state, event_type, target, severity)
+    elif event_type == EventType.DEMAND_SURGE:
+        _surge_customer(state.customers[target], qty=60)
+        _tighten_window(state.customers[target], state.clock, end_after_min=35)
+        event = sim.inject_event(state, event_type, target, severity)
+    elif event_type == EventType.URGENT_ORDER:
+        _surge_customer(state.customers[target], qty=35)
+        _tighten_window(state.customers[target], state.clock, end_after_min=15)
+        event = sim.inject_event(state, event_type, target, severity)
+    elif event_type == EventType.INVENTORY_SHORTAGE:
+        _force_inventory_shortage(state, target)
+        event = sim.inject_event(state, event_type, target, severity)
+    elif event_type == EventType.VEHICLE_BREAKDOWN:
+        _surge_customer(state.customers[target], qty=40)
+        broken_vid = _break_committed_vehicle(state, target)
+        event = sim.inject_event(state, event_type, target, severity)
+        event.metrics["broken_vehicle"] = 1.0
+        event.description = f"injected vehicle_breakdown for {broken_vid} serving {target}"
+    else:
+        raise ValueError(f"unsupported disrupted event type: {event_type}")
+
+    return sim, state, event
+
+
+def iter_disrupted_examples(settings, n_seeds: int, optimizer, warmup_ticks: int = 6):
+    for seed in range(settings.seed, settings.seed + n_seeds):
+        for spec in DISRUPTED_EVENT_SPECS:
+            yield seed, make_disrupted_example(seed, spec, settings, optimizer, warmup_ticks)
 
 
 _REASONING_SYSTEM = (
@@ -230,6 +343,28 @@ def grade_full(simulator, state: WorldState, event: Event, settings):
             id="ORACLE_PROBE", timestamp=state.clock, event_id=event.id, action=a,
             engine=DecisionEngine.RULE_BASED, description=f"oracle probe {a.value}")
         rolled = roll_forward(simulator, state, probe, horizon)
+        results.append((a, realized_cost(rolled, weights),
+                        realized_delay_minutes(rolled)))
+    results.sort(key=lambda t: (t[1], t[0].value))
+    return results
+
+
+def grade_disrupted(simulator, state: WorldState, event: Event, settings, optimizer):
+    """M-F grading path: freeze exogenous churn, replay live travel time, and
+    re-solve when the action changes the routing problem."""
+    weights = _Weights(settings)
+    horizon = max(settings.oracle_horizon_ticks, 60)
+    results = []
+    for a in candidate_actions(event.event_type):
+        probe = Decision(
+            id="ORACLE_PROBE", timestamp=state.clock, event_id=event.id, action=a,
+            engine=DecisionEngine.RULE_BASED, description=f"oracle probe {a.value}")
+        rolled = roll_forward(
+            simulator, state, probe, horizon,
+            resolve=lambda st: reroute(st, optimizer),
+            freeze_world=True,
+            enable_travel_time=True,
+        )
         results.append((a, realized_cost(rolled, weights),
                         realized_delay_minutes(rolled)))
     results.sort(key=lambda t: (t[1], t[0].value))

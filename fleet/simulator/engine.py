@@ -14,6 +14,7 @@ from fleet.contracts.state import (
     WorldState, Event, EventType, EventSeverity, VehicleStatus, Vehicle,
     EdgeStatus,
 )
+from fleet.routing.matrix import shortest_times_from, DEFAULT_SERVICE_TIME_MIN
 
 
 def _seasonal_factor(hour: int) -> float:
@@ -68,6 +69,7 @@ def _pending_demand_by_sku(state: WorldState) -> Dict[str, int]:
 class WorldSimulator:
     def __init__(self, settings):
         self.settings = settings
+        self.advance_only = False         # M-F: grading-only mode; tick advances time and movement, but freezes exogenous world updates
         self.rng = random.Random(settings.seed)
         self._evt_seq = 0
         self._mins_since_restock = 0
@@ -87,13 +89,14 @@ class WorldSimulator:
             self._restock_batch = dict(state.depot.inventory)
         if self._start_clock is None:
             self._start_clock = state.clock
-        if self.settings.enable_weather:
-            self._step_rain()
-            self._update_traffic(state)
-            self._update_weather(state)
-        self._generate_demand(state)
-        self._maybe_restock(state)
-        self._update_shortage_events(state)
+        if not self.advance_only:
+            if self.settings.enable_weather:
+                self._step_rain()
+                self._update_traffic(state)
+                self._update_weather(state)
+            self._generate_demand(state)
+            self._maybe_restock(state)
+            self._update_shortage_events(state)
         self._advance_vehicles(state)
 
     def inject_event(self, state: WorldState, event_type: EventType,
@@ -262,6 +265,9 @@ class WorldSimulator:
     def _advance_vehicles(self, state: WorldState) -> None:
         """Schedule-driven movement: visit every stop whose planned arrival has
         passed, delivering on arrival; return to depot once the shift is over."""
+        if getattr(self.settings, "enable_travel_time", False):
+            self._advance_vehicles_live(state)
+            return
         for vid, route in state.plan.items():
             vehicle = state.vehicles.get(vid)
             if vehicle is None or vehicle.status in (
@@ -277,6 +283,58 @@ class WorldSimulator:
                     vehicle.current_stop_index = stop.sequence
                     vehicle.status = VehicleStatus.ON_ROUTE
                     self._deliver(state, vehicle, stop.customer_id)
+            all_visited = route.stops and all(
+                s.actual_arrival is not None for s in route.stops)
+            shift_done = route.end_time is None or state.clock >= route.end_time
+            if all_visited and shift_done:
+                vehicle.status = VehicleStatus.AT_DEPOT
+                vehicle.pos = state.depot.location
+                vehicle.current_stop_index = -1
+
+    def _advance_vehicles_live(self, state: WorldState) -> None:
+        """Replay route progress against the current road graph so disruptions
+        change realized travel times. No extra simulator state is stored: the
+        current node/time are reconstructed from the already-visited stops."""
+        for vid, route in state.plan.items():
+            vehicle = state.vehicles.get(vid)
+            if vehicle is None or vehicle.status in (
+                    VehicleStatus.BROKEN, VehicleStatus.MAINTENANCE):
+                continue
+
+            visited = [s for s in route.stops if s.actual_arrival is not None]
+            visited.sort(key=lambda s: s.sequence)
+            if visited:
+                last = visited[-1]
+                cur_node = last.customer_id
+                cur_time = last.actual_departure or (
+                    last.actual_arrival + timedelta(minutes=DEFAULT_SERVICE_TIME_MIN))
+            else:
+                cur_node = "DEPOT"
+                cur_time = state.depot.opening_time
+
+            for stop in sorted(route.stops, key=lambda s: s.sequence):
+                if stop.actual_arrival is not None:
+                    continue
+                dist = shortest_times_from(
+                    state.road_graph, cur_node, vehicle.wade_capability)
+                if stop.customer_id not in dist:
+                    break
+                arrival = cur_time + timedelta(minutes=dist[stop.customer_id])
+                if arrival > state.clock:
+                    break
+                stop.actual_arrival = arrival
+                cust = state.customers.get(stop.customer_id)
+                service_min = (float(getattr(cust, "service_time_min", DEFAULT_SERVICE_TIME_MIN))
+                               if cust is not None else DEFAULT_SERVICE_TIME_MIN)
+                stop.actual_departure = arrival + timedelta(minutes=service_min)
+                if cust is not None:
+                    vehicle.pos = cust.location
+                vehicle.current_stop_index = stop.sequence
+                vehicle.status = VehicleStatus.ON_ROUTE
+                self._deliver(state, vehicle, stop.customer_id)
+                cur_node = stop.customer_id
+                cur_time = stop.actual_departure
+
             all_visited = route.stops and all(
                 s.actual_arrival is not None for s in route.stops)
             shift_done = route.end_time is None or state.clock >= route.end_time

@@ -17,20 +17,26 @@ from fleet.factory import build_components
 from fleet.agent.dataset import (
     iter_examples, grade_full, is_informative, build_record, batch_reasoning,
     split_by_seed, default_batch_submit, build_preference_record, templated_reasoning,
+    iter_disrupted_examples, grade_disrupted,
 )
 
 
 def build_dataset(settings, n_seeds, out_dir, holdout_frac=0.2, use_teacher=False,
-                  dpo=False):
+                  dpo=False, consequential=False):
     """Generate the dataset and write {train,test}.jsonl (and prefs.jsonl when dpo)
     under out_dir. Returns a report dict (counts, informative fraction, coverage)."""
     optimizer = build_components(settings).optimizer
 
     graded = []          # (seed, state, event, full)
     n_total = 0
-    for seed, (sim, state, event) in iter_examples(settings, n_seeds, optimizer):
+    example_iter = (iter_disrupted_examples(settings, n_seeds, optimizer)
+                    if consequential else
+                    iter_examples(settings, n_seeds, optimizer))
+    for seed, (sim, state, event) in example_iter:
         n_total += 1
-        full = grade_full(sim, state, event, settings)
+        full = (grade_disrupted(sim, state, event, settings, optimizer)
+                if consequential else
+                grade_full(sim, state, event, settings))
         scored = [(a, c) for a, c, _d in full]
         if is_informative(scored, settings.oracle_min_gap):
             graded.append((seed, state, event, full))
@@ -70,6 +76,7 @@ def build_dataset(settings, n_seeds, out_dir, holdout_frac=0.2, use_teacher=Fals
         "n_test": len(test),
         "n_prefs": len(prefs),
         "event_types": coverage,
+        "consequential": consequential,
     }
 
 
@@ -88,10 +95,14 @@ def main():
                    help="label reasoning via Sonnet 4.6 Batch (needs ANTHROPIC_API_KEY)")
     p.add_argument("--dpo", action="store_true",
                    help="also emit prefs.jsonl (oracle best/worst preference pairs)")
+    p.add_argument("--consequential", action="store_true",
+                   help="use the M-F consequential-disruptions path for oracle grading")
     args = p.parse_args()
 
     report = build_dataset(load_settings(), args.seeds, args.out,
-                           args.holdout_frac, args.use_teacher, args.dpo)
+                           args.holdout_frac, args.use_teacher, args.dpo,
+                           args.consequential or os.environ.get(
+                               "CONSEQUENTIAL_DISRUPTIONS", "0") in ("1", "true", "True"))
     print(json.dumps(report, indent=2))
 
 

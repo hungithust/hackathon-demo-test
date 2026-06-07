@@ -5,6 +5,7 @@ that outcome reusing the M-D ScoringEngine weights so cost is in one unit.
 Pure CPU, deterministic, no GPU/network — safe in the test suite."""
 
 import copy
+from dataclasses import replace
 from typing import Callable, Optional
 
 from fleet.contracts.state import (
@@ -54,13 +55,19 @@ def realized_cost(state: WorldState, weights: "_Weights") -> float:
 
 
 def roll_forward(simulator, state: WorldState, decision: Decision, horizon: int,
-                 resolve: Optional[Callable[[WorldState], None]] = None) -> WorldState:
+                 resolve: Optional[Callable[[WorldState], None]] = None,
+                 freeze_world: bool = False,
+                 enable_travel_time: bool = False) -> WorldState:
     """Clone (simulator, state, decision) TOGETHER — so the seeded rng is cloned
     with the world and every candidate sees an identical future — then apply the
     decision, optionally re-solve (resolve callback, only for RESOLVE_ACTIONS),
     and tick `horizon` times. Returns the rolled-forward clone; inputs are never
     mutated."""
     sim_c, state_c, dec_c = copy.deepcopy((simulator, state, decision))
+    if enable_travel_time:
+        sim_c.settings = replace(sim_c.settings, enable_travel_time=True)
+    if freeze_world:
+        sim_c.advance_only = True
     Dispatcher().apply(state_c, dec_c)
     if resolve is not None and dec_c.action in RESOLVE_ACTIONS:
         resolve(state_c)
