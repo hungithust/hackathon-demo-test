@@ -44,6 +44,10 @@ class Settings:
     cusum_k: float = 0.5                  # M-C: CUSUM slack (std units) before accumulating
     cusum_threshold: float = 4.0          # M-C: CUSUM alarm threshold (std units)
     detector_min_history: int = 8         # M-C: obs before a statistical detector activates
+    score_w_sla: float = 50.0             # M-D: weight on SLA-breach risk (unresolved disruption)
+    score_w_delay: float = 1.0            # M-D: weight on added delay minutes
+    score_w_drop: float = 50.0            # M-D: weight on priority-weighted dropped orders
+    enable_proactive: bool = False        # M-D: emit proactive shortfall decisions
 
 
 def load_settings(env: Optional[Mapping[str, str]] = None) -> Settings:
@@ -88,4 +92,8 @@ def load_settings(env: Optional[Mapping[str, str]] = None) -> Settings:
         cusum_k=float(e.get("CUSUM_K", "0.5")),
         cusum_threshold=float(e.get("CUSUM_THRESHOLD", "4.0")),
         detector_min_history=int(e.get("DETECTOR_MIN_HISTORY", "8")),
+        score_w_sla=float(e.get("SCORE_W_SLA", "50.0")),
+        score_w_delay=float(e.get("SCORE_W_DELAY", "1.0")),
+        score_w_drop=float(e.get("SCORE_W_DROP", "50.0")),
+        enable_proactive=e.get("ENABLE_PROACTIVE", "0") in ("1", "true", "True"),
     )

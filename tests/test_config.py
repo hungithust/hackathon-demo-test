@@ -112,6 +112,20 @@ def test_statistical_detector_env_override():
     assert s.detector_min_history == 12
 
 
+def test_scoring_defaults():
+    s = load_settings(env={})
+    assert s.score_w_sla == 50.0
+    assert s.score_w_delay == 1.0
+    assert s.score_w_drop == 50.0
+    assert s.enable_proactive is False
+
+
+def test_scoring_env_override():
+    s = load_settings(env={"DECISION_ENGINE": "scoring", "ENABLE_PROACTIVE": "1"})
+    assert s.decision_engine == "scoring"
+    assert s.enable_proactive is True
+
+
 def test_is_frozen():
     s = Settings()
     try:
