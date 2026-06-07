@@ -4,7 +4,7 @@ label, attaches reasoning (Sonnet Batch or a $0 templated fallback), and emits
 train/serve-parity JSONL. Pure CPU; the Batch transport is injected so the test
 suite never imports anthropic or touches the network."""
 
-from fleet.contracts.state import WorldState
+from fleet.contracts.state import WorldState, Event
 
 
 def realized_delay_minutes(state: WorldState) -> float:
@@ -30,3 +30,13 @@ def is_informative(scored, min_gap: float) -> bool:
         return False
     costs = [c for _, c in scored]
     return (max(costs) - min(costs)) >= min_gap
+
+
+def templated_reasoning(event: Event, scored) -> str:
+    """A $0, deterministic justification built from the oracle's scored options."""
+    best, best_cost = scored[0]
+    base = (f"Simulated each option for the {event.event_type.value} on "
+            f"{event.target}; chose {best.value} with the lowest realized cost "
+            f"{best_cost:.1f}")
+    alts = ", ".join(f"{a.value}={c:.1f}" for a, c in scored[1:])
+    return base + (f" versus {alts}." if alts else ".")

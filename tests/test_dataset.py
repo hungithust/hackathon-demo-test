@@ -46,3 +46,29 @@ def test_is_informative_uses_cost_gap():
     assert is_informative(scored, min_gap=100.0) is False
     assert is_informative([(DecisionAction.REROUTE, 5.0)], min_gap=1.0) is False
     assert is_informative([], min_gap=1.0) is False
+
+
+def test_templated_reasoning_names_choice_and_alternatives():
+    from fleet.contracts.state import Event, EventType, EventSeverity, DecisionAction
+    from fleet.agent.dataset import templated_reasoning
+    evt = Event(id="E1", event_type=EventType.INVENTORY_SHORTAGE, target="SKU001",
+                severity=EventSeverity.HIGH, started_at=_BASE)
+    scored = [(DecisionAction.REPRIORITIZE, 12.0),
+              (DecisionAction.DEFER, 20.0),
+              (DecisionAction.CANCEL, 60.0)]
+    text = templated_reasoning(evt, scored)
+    assert text == (
+        "Simulated each option for the inventory_shortage on SKU001; "
+        "chose reprioritize with the lowest realized cost 12.0 "
+        "versus defer=20.0, cancel=60.0.")
+
+
+def test_templated_reasoning_handles_single_candidate():
+    from fleet.contracts.state import Event, EventType, EventSeverity, DecisionAction
+    from fleet.agent.dataset import templated_reasoning
+    evt = Event(id="E2", event_type=EventType.TRAFFIC, target="e1",
+                severity=EventSeverity.MEDIUM, started_at=_BASE)
+    text = templated_reasoning(evt, [(DecisionAction.REROUTE, 8.0)])
+    assert text == (
+        "Simulated each option for the traffic on e1; "
+        "chose reroute with the lowest realized cost 8.0.")
