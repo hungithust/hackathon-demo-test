@@ -145,3 +145,13 @@ def test_oracle_min_gap_default_and_override():
     from config.settings import load_settings
     assert load_settings({}).oracle_min_gap == 1.0
     assert load_settings({"ORACLE_MIN_GAP": "5"}).oracle_min_gap == 5.0
+
+
+def test_nim_settings_defaults_and_override():
+    from config.settings import load_settings
+    s = load_settings({})
+    assert s.nim_endpoint == ""
+    assert s.nim_model == "nvidia/llama-3.1-nemotron-nano-8b-v1"
+    s2 = load_settings({"NIM_ENDPOINT": "http://localhost:8000/v1", "NIM_MODEL": "x"})
+    assert s2.nim_endpoint == "http://localhost:8000/v1"
+    assert s2.nim_model == "x"
