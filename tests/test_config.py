@@ -99,6 +99,19 @@ def test_holt_winters_env_override():
     assert s.season_length == 12
 
 
+def test_statistical_detector_defaults():
+    s = load_settings(env={})
+    assert s.cusum_k == 0.5
+    assert s.cusum_threshold == 4.0
+    assert s.detector_min_history == 8
+
+
+def test_statistical_detector_env_override():
+    s = load_settings(env={"CUSUM_THRESHOLD": "3.0", "DETECTOR_MIN_HISTORY": "12"})
+    assert s.cusum_threshold == 3.0
+    assert s.detector_min_history == 12
+
+
 def test_is_frozen():
     s = Settings()
     try:

@@ -41,6 +41,9 @@ class Settings:
     hw_gamma: float = 0.1                 # M-B: Holt-Winters seasonal smoothing
     season_length: int = 24               # M-B: seasonal period (in history steps)
     pi_z: float = 1.96                    # M-B: prediction-interval z (1.96 = ~95%)
+    cusum_k: float = 0.5                  # M-C: CUSUM slack (std units) before accumulating
+    cusum_threshold: float = 4.0          # M-C: CUSUM alarm threshold (std units)
+    detector_min_history: int = 8         # M-C: obs before a statistical detector activates
 
 
 def load_settings(env: Optional[Mapping[str, str]] = None) -> Settings:
@@ -82,4 +85,7 @@ def load_settings(env: Optional[Mapping[str, str]] = None) -> Settings:
         hw_gamma=float(e.get("HW_GAMMA", "0.1")),
         season_length=int(e.get("SEASON_LENGTH", "24")),
         pi_z=float(e.get("PI_Z", "1.96")),
+        cusum_k=float(e.get("CUSUM_K", "0.5")),
+        cusum_threshold=float(e.get("CUSUM_THRESHOLD", "4.0")),
+        detector_min_history=int(e.get("DETECTOR_MIN_HISTORY", "8")),
     )
