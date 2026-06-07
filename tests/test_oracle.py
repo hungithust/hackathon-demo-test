@@ -54,3 +54,28 @@ def test_realized_cost_charges_late_delivery():
     w = _Weights(load_settings({}))
     # late 30 min, 1 breached customer, no drops -> 1*30 + 50*1 = 80
     assert realized_cost(st, w) == 80.0
+
+
+def test_roll_forward_is_deterministic_and_pure():
+    from fleet.contracts.state import Decision, DecisionAction, DecisionEngine
+    from fleet.scenarios import build_sample_state
+    from fleet.simulator.engine import WorldSimulator
+    from fleet.agent.oracle import roll_forward
+
+    settings = load_settings({})
+    state = build_sample_state()
+    sim = WorldSimulator(settings)
+    dec = Decision(id="D", timestamp=state.clock, event_id=None,
+                   action=DecisionAction.REPRIORITIZE,
+                   engine=DecisionEngine.RULE_BASED, description="probe")
+    before_clock = state.clock
+    w = _Weights(settings)
+
+    r1 = roll_forward(sim, state, dec, horizon=5)
+    r2 = roll_forward(sim, state, dec, horizon=5)
+
+    assert realized_cost(r1, w) == realized_cost(r2, w)   # identical future across branches
+    assert r1.clock > before_clock                         # the clone advanced 5 ticks
+    assert state.clock == before_clock                     # original state untouched
+    assert state.sim_tick == 0                             # original simulator state untouched
+    assert dec.executed_at is None                         # caller's decision untouched
