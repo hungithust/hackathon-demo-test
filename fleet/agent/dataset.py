@@ -234,3 +234,23 @@ def grade_full(simulator, state: WorldState, event: Event, settings):
                         realized_delay_minutes(rolled)))
     results.sort(key=lambda t: (t[1], t[0].value))
     return results
+
+
+def build_preference_record(state: WorldState, event: Event, full,
+                            chosen_reasoning: str) -> dict:
+    """A DPO row from the oracle's full ranking: chosen = lowest-cost action,
+    rejected = highest-cost action. Prompt fields keep train/serve parity."""
+    best_a, _best_c, best_d = full[0]
+    worst_a, worst_c, worst_d = full[-1]
+    system, user = build_messages(state, event)
+    return {
+        "system": system,
+        "user": user,
+        "chosen": {"action": best_a.value, "reasoning": chosen_reasoning,
+                   "added_delay_min": round(float(best_d), 2)},
+        "rejected": {
+            "action": worst_a.value,
+            "reasoning": f"Higher simulated cost {worst_c:.1f}; "
+                         f"rejected in favor of {best_a.value}.",
+            "added_delay_min": round(float(worst_d), 2)},
+    }

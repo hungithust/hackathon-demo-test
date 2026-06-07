@@ -214,3 +214,26 @@ def test_grade_full_returns_sorted_action_cost_delay():
     assert len(full) == len(cands)
     assert all(d >= 0.0 for _a, _c, d in full)
     assert full == grade_full(sim, state, evt, settings)        # deterministic
+
+
+def test_build_preference_record_uses_best_and_worst():
+    from fleet.contracts.state import Event, EventType, EventSeverity, DecisionAction
+    from fleet.scenarios import build_sample_state
+    from fleet.agent.dataset import build_preference_record
+    from fleet.agent.claude_agent import build_messages
+
+    state = build_sample_state()
+    evt = Event(id="E1", event_type=EventType.INVENTORY_SHORTAGE, target="SKU001",
+                severity=EventSeverity.HIGH, started_at=state.clock)
+    full = [(DecisionAction.REPRIORITIZE, 10.0, 3.0),    # best
+            (DecisionAction.DEFER, 20.0, 60.0),
+            (DecisionAction.CANCEL, 90.0, 0.0)]          # worst
+
+    rec = build_preference_record(state, evt, full, "because it costs least")
+    system, user = build_messages(state, evt)
+    assert rec["system"] == system and rec["user"] == user
+    assert rec["chosen"] == {"action": "reprioritize",
+                             "reasoning": "because it costs least", "added_delay_min": 3.0}
+    assert rec["rejected"]["action"] == "cancel"
+    assert rec["rejected"]["added_delay_min"] == 0.0
+    assert "90.0" in rec["rejected"]["reasoning"]        # names the worse simulated cost
