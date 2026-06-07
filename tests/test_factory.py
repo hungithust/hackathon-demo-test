@@ -63,3 +63,15 @@ def test_default_detector_is_rule():
 def test_zscore_detector_selected_by_setting():
     comps = build_components(load_settings(env={"DETECTOR_ENGINE": "zscore"}))
     assert isinstance(comps.detector, ZScoreDetector)
+
+
+def test_factory_selects_holt_winters_when_requested():
+    from fleet.forecast.holt_winters import HoltWintersForecaster
+    c = build_components(load_settings(env={"FORECASTER_ENGINE": "holt"}))
+    assert isinstance(c.forecaster, HoltWintersForecaster)
+
+
+def test_factory_defaults_to_ewma_forecaster():
+    from fleet.forecast.ewma import EwmaForecaster
+    c = build_components(load_settings(env={}))
+    assert isinstance(c.forecaster, EwmaForecaster)

@@ -13,6 +13,7 @@ from fleet.detection.zscore import ZScoreDetector
 from fleet.routing.cpu_solver import CpuSolver
 from fleet.routing.cuopt_adapter import CuOptAdapter
 from fleet.forecast.ewma import EwmaForecaster
+from fleet.forecast.holt_winters import HoltWintersForecaster
 from fleet.agent.rule_based import RuleBasedEngine
 from fleet.agent.claude_agent import ClaudeAgent
 from fleet.dispatch.dispatcher import Dispatcher as DispatcherImpl
@@ -52,11 +53,18 @@ def build_components(settings) -> Components:
     else:
         detector = RuleDetector(settings)
 
+    # Forecaster: Holt-Winters (level+trend+seasonality+intervals) when requested,
+    # else the default EWMA. (prophet remains a future, unimplemented slot.)
+    if settings.forecaster_engine == "holt":
+        forecaster: Forecaster = HoltWintersForecaster(settings)
+    else:
+        forecaster = EwmaForecaster(settings)
+
     return Components(
         simulator=WorldSimulator(settings),
         detector=detector,
         optimizer=optimizer,
-        forecaster=EwmaForecaster(settings),   # prophet not yet implemented (M6)
+        forecaster=forecaster,
         decision_engine=decision_engine,
         dispatcher=DispatcherImpl(),
     )
