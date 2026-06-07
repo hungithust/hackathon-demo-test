@@ -75,6 +75,10 @@ class WorldSimulator:
         self._ar_state: Dict[str, float] = {}   # M-A: per-customer AR(1) state
         self._regime_until: Dict[str, "datetime"] = {}  # M-A: regime end clock
         self._start_clock = None          # M-A: captured on first tick for trend
+        self._weather_rng = random.Random(settings.seed + 1)  # M-A2: independent of demand rng
+        self._rain = 0.0                                      # M-A2: rain level in [0,1]
+        self._flood_prone = None                              # M-A2: lazily-snapshotted edge ids
+        self._weather_flooded: set = set()                    # M-A2: edges flooded BY weather
 
     def tick(self, state: WorldState) -> None:
         state.clock += timedelta(minutes=self.settings.tick_minutes)
@@ -159,6 +163,14 @@ class WorldSimulator:
                 minutes=self.settings.regime_duration_min)
             return self.settings.regime_factor
         return 1.0
+
+    def _step_rain(self) -> float:
+        """AR(1) rain process in [0,1]: rho keeps rain spells persistent.
+        Uses the independent weather rng so the demand stream is untouched."""
+        rho = self.settings.weather_rho
+        shock = self._weather_rng.random()
+        self._rain = max(0.0, min(1.0, rho * self._rain + (1.0 - rho) * shock))
+        return self._rain
 
     def _generate_demand(self, state: WorldState) -> None:
         if not state.depot.inventory:
