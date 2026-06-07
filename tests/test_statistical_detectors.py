@@ -1,5 +1,15 @@
 from fleet.contracts.state import EventSeverity
 from fleet.detection.severity import severity_from_z
+from fleet.contracts.interfaces import Detector
+from fleet.detection.forecast_residual import ForecastResidualDetector
+from fleet.forecast.holt_winters import HoltWintersForecaster
+from fleet.contracts.state import EventType
+from fleet.scenarios import build_sample_state
+from config.settings import load_settings
+
+
+def _set_orders(state, cid, total):
+    state.customers[cid].orders = {"SKU001": int(total)}
 
 
 def test_severity_bands():
@@ -15,3 +25,37 @@ def test_severity_monotonic():
     zs = [0.0, 2.0, 3.0, 4.0]
     sevs = [severity_from_z(z) for z in zs]
     assert [order.index(s) for s in sevs] == sorted(order.index(s) for s in sevs)
+
+
+def test_residual_detector_conforms_to_protocol():
+    s = load_settings(env={"SEASON_LENGTH": "3"})
+    d = ForecastResidualDetector(s, HoltWintersForecaster(s))
+    assert isinstance(d, Detector)
+
+
+def test_residual_flags_demand_above_band():
+    s = load_settings(env={"SEASON_LENGTH": "3", "DETECTOR_MIN_HISTORY": "6"})
+    d = ForecastResidualDetector(s, HoltWintersForecaster(s))
+    state = build_sample_state()
+    # feed a stable history for C001, then a big spike
+    for _ in range(12):
+        _set_orders(state, "C001", 10)
+        d.detect(state)
+    _set_orders(state, "C001", 80)                  # large surge
+    events = d.detect(state)
+    surges = [e for e in events if e.event_type == EventType.DEMAND_SURGE
+              and e.target == "C001"]
+    assert len(surges) == 1
+    assert surges[0].id == "DET_RESID_C001"
+
+
+def test_residual_quiet_when_demand_in_band():
+    s = load_settings(env={"SEASON_LENGTH": "3", "DETECTOR_MIN_HISTORY": "6"})
+    d = ForecastResidualDetector(s, HoltWintersForecaster(s))
+    state = build_sample_state()
+    events = []
+    for _ in range(14):
+        _set_orders(state, "C001", 10)              # perfectly stable
+        events = d.detect(state)
+    c001 = [e for e in events if e.target == "C001"]
+    assert c001 == []                               # no false positive on stable demand
