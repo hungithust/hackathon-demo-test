@@ -69,6 +69,21 @@ def test_latent_process_env_override():
     assert s.regime_factor == 3.5
 
 
+def test_weather_defaults():
+    s = load_settings(env={})
+    assert s.enable_weather is False
+    assert s.traffic_peak_factor == 1.8
+    assert s.weather_rho == 0.8
+    assert s.weather_flood_threshold == 0.7
+    assert s.weather_flood_level == 0.5
+
+
+def test_weather_env_override():
+    s = load_settings(env={"ENABLE_WEATHER": "1", "TRAFFIC_PEAK_FACTOR": "2.2"})
+    assert s.enable_weather is True
+    assert s.traffic_peak_factor == 2.2
+
+
 def test_is_frozen():
     s = Settings()
     try:
