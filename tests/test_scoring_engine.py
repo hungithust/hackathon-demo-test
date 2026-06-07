@@ -2,8 +2,9 @@ from datetime import datetime
 
 from fleet.contracts.state import EventType, DecisionAction, Event, EventSeverity
 from fleet.agent.scoring_engine import (
-    candidate_actions, _resolves, score_action, _Weights,
+    candidate_actions, _resolves, score_action, _Weights, ScoringEngine,
 )
+from fleet.contracts.interfaces import DecisionEngine as DecisionEngineProto
 from fleet.scenarios import build_sample_state
 from config.settings import load_settings
 
@@ -53,3 +54,30 @@ def test_priority_weight_scales_drop_cost():
     e_low = _evt(EventType.INVENTORY_SHORTAGE, "C002")
     assert (score_action(s, e_urgent, DecisionAction.CANCEL, w)
             > score_action(s, e_low, DecisionAction.CANCEL, w))
+
+
+def test_scoring_engine_conforms_to_protocol():
+    assert isinstance(ScoringEngine(load_settings()), DecisionEngineProto)
+
+
+def test_decide_picks_lowest_cost_and_records_table():
+    s = build_sample_state()
+    eng = ScoringEngine(load_settings())
+    e = _evt(EventType.FLOODED_AREA, "DEPOT->C001#2", EventSeverity.CRITICAL)
+    decisions = eng.decide(s, [e])
+    assert len(decisions) == 1
+    d = decisions[0]
+    assert d.action == DecisionAction.REROUTE              # cheapest resolving action
+    assert d.event_id == "E1"
+    assert "score_reroute" in d.impact_estimate            # scored table persisted
+    assert "score_defer" in d.impact_estimate
+    assert d.impact_estimate["added_delay_min"] == 8.0
+    assert "reroute" in d.reasoning and "defer" in d.reasoning   # alternatives in prose
+
+
+def test_decide_is_deterministic():
+    s = build_sample_state()
+    e = _evt(EventType.VEHICLE_BREAKDOWN, "V001", EventSeverity.CRITICAL)
+    a = ScoringEngine(load_settings()).decide(s, [e])[0]
+    b = ScoringEngine(load_settings()).decide(s, [e])[0]
+    assert a.action == b.action and a.impact_estimate == b.impact_estimate

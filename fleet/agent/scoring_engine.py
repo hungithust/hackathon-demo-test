@@ -81,3 +81,39 @@ def score_action(state: WorldState, event: Event, action: DecisionAction,
     if not _resolves(event.event_type, action):
         cost += weights.sla * _SEVERITY_WEIGHT.get(event.severity, 2.0)
     return cost
+
+
+class ScoringEngine:
+    def __init__(self, settings=None):
+        self.settings = settings
+        self.weights = _Weights(settings)
+        self.enable_proactive = bool(getattr(settings, "enable_proactive", False))
+        self._seq = 0
+        self._proactive_emitted: set = set()
+
+    def decide(self, state: WorldState, events: List[Event]) -> List[Decision]:
+        out: List[Decision] = []
+        for e in events:
+            scored = sorted(
+                ((a, score_action(state, e, a, self.weights))
+                 for a in candidate_actions(e.event_type)),
+                key=lambda t: (t[1], t[0].value))      # min cost, stable tie-break
+            best, cost = scored[0]
+            self._seq += 1
+            impact: Dict[str, float] = {
+                f"score_{a.value}": round(c, 2) for a, c in scored}
+            impact["added_delay_min"] = float(max(0.0, _ACTION_EFFECT[best]["delay"]))
+            alts = ", ".join(f"{a.value}={c:.1f}" for a, c in scored[1:])
+            out.append(Decision(
+                id=f"DEC_{self._seq:03d}", timestamp=state.clock, event_id=e.id,
+                action=best, engine=DecisionEngine.RULE_BASED,
+                description=f"[scoring] {e.event_type.value} on {e.target}",
+                impact_estimate=impact,
+                reasoning=f"chose {best.value} (cost {cost:.1f}) over {alts}",
+            ))
+        if self.enable_proactive:
+            out.extend(self._proactive(state))
+        return out
+
+    def _proactive(self, state: WorldState) -> List[Decision]:
+        return []        # filled in Task 5
