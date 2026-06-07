@@ -118,3 +118,35 @@ def test_grade_example_is_deterministic_and_returns_a_candidate():
     # determinism
     action2, delay2, scored2 = grade_example(sim, state, evt, settings)
     assert (action, delay, scored) == (action2, delay2, scored2)
+
+
+def test_make_example_injects_event_and_is_deterministic():
+    from config.settings import load_settings
+    from fleet.contracts.state import EventType, EventSeverity
+    from fleet.factory import build_components
+    from fleet.agent.dataset import make_example, DATASET_EVENT_SPECS
+
+    settings = load_settings({})
+    optimizer = build_components(settings).optimizer
+    spec = (EventType.INVENTORY_SHORTAGE, EventSeverity.HIGH, "sku")
+
+    sim1, state1, evt1 = make_example(7, spec, settings, optimizer)
+    assert evt1 in state1.events                       # the event is present in the world
+    assert evt1.event_type == EventType.INVENTORY_SHORTAGE
+    assert state1.plan                                 # routes were solved
+
+    # determinism: same seed+spec -> same injected event id + target
+    sim2, state2, evt2 = make_example(7, spec, settings, optimizer)
+    assert (evt2.id, evt2.target, evt2.severity) == (evt1.id, evt1.target, evt1.severity)
+
+
+def test_iter_examples_spans_all_event_specs_per_seed():
+    from config.settings import load_settings
+    from fleet.factory import build_components
+    from fleet.agent.dataset import iter_examples, DATASET_EVENT_SPECS
+
+    settings = load_settings({})
+    optimizer = build_components(settings).optimizer
+    seen = {evt.event_type for _seed, (_sim, _state, evt)
+            in iter_examples(settings, n_seeds=1, optimizer=optimizer)}
+    assert seen == {spec[0] for spec in DATASET_EVENT_SPECS}

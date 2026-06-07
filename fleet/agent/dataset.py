@@ -4,12 +4,18 @@ label, attaches reasoning (Sonnet Batch or a $0 templated fallback), and emits
 train/serve-parity JSONL. Pure CPU; the Batch transport is injected so the test
 suite never imports anthropic or touches the network."""
 
+from dataclasses import replace
+
 from fleet.contracts.state import (
     WorldState, Event, DecisionAction, Decision, DecisionEngine,
+    EventType, EventSeverity,
 )
 from fleet.agent.claude_agent import build_messages
 from fleet.agent.scoring_engine import candidate_actions, _Weights
 from fleet.agent.oracle import roll_forward, realized_cost
+from fleet.scenarios import build_sample_state
+from fleet.simulator.engine import WorldSimulator
+from fleet.routing.planner import plan_routes
 
 
 def realized_delay_minutes(state: WorldState) -> float:
@@ -81,3 +87,48 @@ def grade_example(simulator, state: WorldState, event: Event, settings):
     best, _best_cost, best_delay = results[0]
     scored = [(a, c) for a, c, _ in results]
     return best, best_delay, scored
+
+
+# (event_type, severity, target_kind) — spans all 4 disruption classes + severities.
+DATASET_EVENT_SPECS = [
+    (EventType.TRAFFIC, EventSeverity.MEDIUM, "edge"),
+    (EventType.FLOODED_AREA, EventSeverity.HIGH, "edge"),
+    (EventType.DEMAND_SURGE, EventSeverity.MEDIUM, "customer"),
+    (EventType.URGENT_ORDER, EventSeverity.HIGH, "customer"),
+    (EventType.INVENTORY_SHORTAGE, EventSeverity.HIGH, "sku"),
+    (EventType.VEHICLE_BREAKDOWN, EventSeverity.CRITICAL, "vehicle"),
+]
+
+
+def _pick_target(state: WorldState, kind: str) -> str:
+    """Deterministic target for an injected event (first id in sorted order)."""
+    if kind == "edge":
+        return sorted(state.road_graph.edges)[0]
+    if kind == "customer":
+        return sorted(state.customers)[0]
+    if kind == "sku":
+        return sorted(state.depot.inventory)[0]
+    if kind == "vehicle":
+        return sorted(state.vehicles)[0]
+    raise ValueError(f"unknown target kind: {kind}")
+
+
+def make_example(seed: int, spec, settings, optimizer, warmup_ticks: int = 6):
+    """Build a planned, warmed-up world for one (seed, spec) and inject the event.
+    Returns (simulator, state, event). Deterministic given the inputs."""
+    s = replace(settings, seed=seed)
+    state = build_sample_state()
+    sim = WorldSimulator(s)
+    plan_routes(state, optimizer)                 # solve routes so actions matter
+    for _ in range(warmup_ticks):
+        sim.tick(state)
+    event_type, severity, kind = spec
+    event = sim.inject_event(state, event_type, _pick_target(state, kind), severity)
+    return sim, state, event
+
+
+def iter_examples(settings, n_seeds: int, optimizer, warmup_ticks: int = 6):
+    """Yield (seed, (simulator, state, event)) over seeds x DATASET_EVENT_SPECS."""
+    for seed in range(settings.seed, settings.seed + n_seeds):
+        for spec in DATASET_EVENT_SPECS:
+            yield seed, make_example(seed, spec, settings, optimizer, warmup_ticks)
