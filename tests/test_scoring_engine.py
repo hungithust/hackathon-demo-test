@@ -81,3 +81,26 @@ def test_decide_is_deterministic():
     a = ScoringEngine(load_settings()).decide(s, [e])[0]
     b = ScoringEngine(load_settings()).decide(s, [e])[0]
     assert a.action == b.action and a.impact_estimate == b.impact_estimate
+
+
+def test_proactive_off_by_default():
+    s = build_sample_state()
+    eng = ScoringEngine(load_settings())          # enable_proactive False
+    # drive depot stock to zero so everything is "at risk"
+    s.depot.inventory = {sku: 0 for sku in s.depot.inventory}
+    assert eng.decide(s, []) == []                # no events, proactive disabled => nothing
+
+
+def test_proactive_emits_once_per_at_risk_customer_when_enabled():
+    s = build_sample_state()
+    eng = ScoringEngine(load_settings(env={"ENABLE_PROACTIVE": "1"}))
+    # make SKU001 short: zero its stock (C001 & C002 order SKU001)
+    s.depot.inventory["SKU001"] = 0
+    first = eng.decide(s, [])
+    ids = {d.id for d in first}
+    assert "DEC_PROACTIVE_C001" in ids
+    assert all(d.event_id is None for d in first)
+    assert all(d.action == DecisionAction.REPRIORITIZE for d in first)
+    # second call with the same shortfall must NOT re-emit (dedup)
+    second = eng.decide(s, [])
+    assert "DEC_PROACTIVE_C001" not in {d.id for d in second}

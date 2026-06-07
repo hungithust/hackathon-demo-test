@@ -116,4 +116,31 @@ class ScoringEngine:
         return out
 
     def _proactive(self, state: WorldState) -> List[Decision]:
-        return []        # filled in Task 5
+        """Pre-empt shortfalls: if total pending for a SKU exceeds depot stock,
+        the customers ordering it are at risk -> emit one reprioritize each
+        (deduped until the shortfall clears). State-projection version of the
+        forecaster proactive signal (§6.2); fully deterministic."""
+        pending: Dict[str, int] = {}
+        for c in state.customers.values():
+            for sku, qty in c.orders.items():
+                pending[sku] = pending.get(sku, 0) + qty
+        short = {sku for sku, q in pending.items()
+                 if q > state.depot.inventory.get(sku, 0)}
+        out: List[Decision] = []
+        for cid in sorted(state.customers):
+            cust = state.customers[cid]
+            at_risk = any(sku in short for sku in cust.orders)
+            if at_risk and cid not in self._proactive_emitted:
+                self._proactive_emitted.add(cid)
+                out.append(Decision(
+                    id=f"DEC_PROACTIVE_{cid}", timestamp=state.clock, event_id=None,
+                    action=DecisionAction.REPRIORITIZE,
+                    engine=DecisionEngine.RULE_BASED,
+                    description=f"[scoring] proactive: {cid} at risk of shortfall",
+                    impact_estimate={"added_delay_min": 0.0},
+                    reasoning=("stock projection shows this customer may not be fully "
+                               "served; reprioritize ahead of the shortfall"),
+                ))
+            elif not at_risk:
+                self._proactive_emitted.discard(cid)
+        return out
