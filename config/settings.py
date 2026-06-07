@@ -24,6 +24,13 @@ class Settings:
     ewma_alpha: float = 0.3                # M6: EWMA smoothing factor (0,1]
     zscore_threshold: float = 2.0          # M6: demand-anomaly z-score cutoff
     traffic_alert_factor: float = 3.0      # M6: traffic_factor at/above this -> TRAFFIC event
+    demand_trend_per_day: float = 0.05    # M-A: slow multiplicative growth per sim-day
+    demand_weekend_factor: float = 0.7    # M-A: Sat/Sun demand multiplier
+    demand_ar_rho: float = 0.6            # M-A: AR(1) autocorrelation of demand noise
+    demand_ar_sigma: float = 0.3          # M-A: AR(1) lognormal noise scale
+    regime_prob: float = 0.01             # M-A: per-customer per-tick chance to enter a promo regime
+    regime_factor: float = 2.0            # M-A: demand multiplier while in a regime
+    regime_duration_min: int = 180        # M-A: regime length (sim minutes)
 
 
 def load_settings(env: Optional[Mapping[str, str]] = None) -> Settings:
@@ -48,4 +55,11 @@ def load_settings(env: Optional[Mapping[str, str]] = None) -> Settings:
         ewma_alpha=float(e.get("EWMA_ALPHA", "0.3")),
         zscore_threshold=float(e.get("ZSCORE_THRESHOLD", "2.0")),
         traffic_alert_factor=float(e.get("TRAFFIC_ALERT_FACTOR", "3")),
+        demand_trend_per_day=float(e.get("DEMAND_TREND_PER_DAY", "0.05")),
+        demand_weekend_factor=float(e.get("DEMAND_WEEKEND_FACTOR", "0.7")),
+        demand_ar_rho=float(e.get("DEMAND_AR_RHO", "0.6")),
+        demand_ar_sigma=float(e.get("DEMAND_AR_SIGMA", "0.3")),
+        regime_prob=float(e.get("REGIME_PROB", "0.01")),
+        regime_factor=float(e.get("REGIME_FACTOR", "2.0")),
+        regime_duration_min=int(e.get("REGIME_DURATION_MIN", "180")),
     )

@@ -52,6 +52,23 @@ def test_m2_env_overrides():
     assert s.restock_interval_min == 60
 
 
+def test_latent_process_defaults():
+    s = load_settings(env={})
+    assert s.demand_trend_per_day == 0.05
+    assert s.demand_weekend_factor == 0.7
+    assert s.demand_ar_rho == 0.6
+    assert s.demand_ar_sigma == 0.3
+    assert s.regime_prob == 0.01
+    assert s.regime_factor == 2.0
+    assert s.regime_duration_min == 180
+
+
+def test_latent_process_env_override():
+    s = load_settings(env={"DEMAND_AR_RHO": "0.9", "REGIME_FACTOR": "3.5"})
+    assert s.demand_ar_rho == 0.9
+    assert s.regime_factor == 3.5
+
+
 def test_is_frozen():
     s = Settings()
     try:
