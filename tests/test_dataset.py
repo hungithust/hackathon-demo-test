@@ -190,3 +190,27 @@ def test_batch_reasoning_falls_back_to_templated_per_missing_id():
     out0 = batch_reasoning(examples, submit=None)
     assert out0 == {"ex-0": templated_reasoning(evt, scored),
                     "ex-1": templated_reasoning(evt, scored)}
+
+
+def test_grade_full_returns_sorted_action_cost_delay():
+    from config.settings import load_settings
+    from fleet.contracts.state import Event, EventType, EventSeverity
+    from fleet.scenarios import build_sample_state
+    from fleet.simulator.engine import WorldSimulator
+    from fleet.agent.scoring_engine import candidate_actions
+    from fleet.agent.dataset import grade_full
+
+    settings = load_settings({})
+    state = build_sample_state()
+    sim = WorldSimulator(settings)
+    evt = Event(id="EVT_F", event_type=EventType.INVENTORY_SHORTAGE, target="SKU001",
+                severity=EventSeverity.HIGH, started_at=state.clock)
+    state.events.append(evt)
+
+    full = grade_full(sim, state, evt, settings)
+    cands = candidate_actions(EventType.INVENTORY_SHORTAGE)
+    assert [a for a, _c, _d in full] == sorted(
+        cands, key=lambda a: (dict((aa, cc) for aa, cc, _ in full)[a], a.value))
+    assert len(full) == len(cands)
+    assert all(d >= 0.0 for _a, _c, d in full)
+    assert full == grade_full(sim, state, evt, settings)        # deterministic

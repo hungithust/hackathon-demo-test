@@ -216,3 +216,21 @@ def default_batch_submit(settings):
         return out
 
     return submit
+
+
+def grade_full(simulator, state: WorldState, event: Event, settings):
+    """The oracle's full ranking: [(action, realized_cost, realized_delay_min)]
+    sorted by (cost, action.value). grade_example is the (best_action, best_delay,
+    [(action, cost)]) view of this; grade_full also exposes the worst tail for DPO."""
+    weights = _Weights(settings)
+    horizon = settings.oracle_horizon_ticks
+    results = []
+    for a in candidate_actions(event.event_type):
+        probe = Decision(
+            id="ORACLE_PROBE", timestamp=state.clock, event_id=event.id, action=a,
+            engine=DecisionEngine.RULE_BASED, description=f"oracle probe {a.value}")
+        rolled = roll_forward(simulator, state, probe, horizon)
+        results.append((a, realized_cost(rolled, weights),
+                        realized_delay_minutes(rolled)))
+    results.sort(key=lambda t: (t[1], t[0].value))
+    return results
