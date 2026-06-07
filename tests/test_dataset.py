@@ -92,3 +92,29 @@ def test_build_record_matches_build_messages_and_schema():
         "action": "reprioritize", "reasoning": "because.", "added_delay_min": 3.0}
     # assistant turn carries exactly the _DECISION_SCHEMA keys
     assert set(record["assistant"]) == {"action", "reasoning", "added_delay_min"}
+
+
+def test_grade_example_is_deterministic_and_returns_a_candidate():
+    from config.settings import load_settings
+    from fleet.contracts.state import Event, EventType, EventSeverity
+    from fleet.scenarios import build_sample_state
+    from fleet.simulator.engine import WorldSimulator
+    from fleet.agent.scoring_engine import candidate_actions
+    from fleet.agent.dataset import grade_example
+
+    settings = load_settings({})
+    state = build_sample_state()
+    sim = WorldSimulator(settings)
+    evt = Event(id="EVT_S", event_type=EventType.INVENTORY_SHORTAGE, target="SKU001",
+                severity=EventSeverity.HIGH, started_at=state.clock)
+    state.events.append(evt)
+
+    action, delay, scored = grade_example(sim, state, evt, settings)
+    assert action in candidate_actions(EventType.INVENTORY_SHORTAGE)
+    assert delay >= 0.0
+    assert [a for a, _ in scored] == sorted(
+        candidate_actions(EventType.INVENTORY_SHORTAGE),
+        key=lambda a: (dict(scored)[a], a.value))     # sorted by (cost, action.value)
+    # determinism
+    action2, delay2, scored2 = grade_example(sim, state, evt, settings)
+    assert (action, delay, scored) == (action2, delay2, scored2)

@@ -4,8 +4,12 @@ label, attaches reasoning (Sonnet Batch or a $0 templated fallback), and emits
 train/serve-parity JSONL. Pure CPU; the Batch transport is injected so the test
 suite never imports anthropic or touches the network."""
 
-from fleet.contracts.state import WorldState, Event, DecisionAction
+from fleet.contracts.state import (
+    WorldState, Event, DecisionAction, Decision, DecisionEngine,
+)
 from fleet.agent.claude_agent import build_messages
+from fleet.agent.scoring_engine import candidate_actions, _Weights
+from fleet.agent.oracle import roll_forward, realized_cost
 
 
 def realized_delay_minutes(state: WorldState) -> float:
@@ -57,3 +61,23 @@ def build_record(state: WorldState, event: Event, action: DecisionAction,
             "added_delay_min": round(float(added_delay_min), 2),
         },
     }
+
+
+def grade_example(simulator, state: WorldState, event: Event, settings):
+    """Roll every candidate action forward and grade by realized cost. Returns
+    (best_action, best_realized_delay_min, scored) where scored is the full
+    [(action, cost), ...] sorted by (cost, action.value)."""
+    weights = _Weights(settings)
+    horizon = settings.oracle_horizon_ticks
+    results = []
+    for a in candidate_actions(event.event_type):
+        probe = Decision(
+            id="ORACLE_PROBE", timestamp=state.clock, event_id=event.id, action=a,
+            engine=DecisionEngine.RULE_BASED, description=f"oracle probe {a.value}")
+        rolled = roll_forward(simulator, state, probe, horizon)
+        results.append((a, realized_cost(rolled, weights),
+                        realized_delay_minutes(rolled)))
+    results.sort(key=lambda t: (t[1], t[0].value))
+    best, _best_cost, best_delay = results[0]
+    scored = [(a, c) for a, c, _ in results]
+    return best, best_delay, scored
