@@ -53,3 +53,32 @@ def test_update_traffic_only_touches_open_edges():
     assert s.road_graph.get_edge("DEPOT->C002").traffic_factor == 1.8
     # the injected CONGESTED edge is left alone (override respected)
     assert s.road_graph.get_edge("DEPOT->C001").traffic_factor == 4.0
+
+
+def test_weather_floods_and_recovers_flood_prone_edges():
+    s = build_sample_state()
+    sim = WorldSimulator(load_settings(env={"WEATHER_FLOOD_THRESHOLD": "0.7"}))
+    fp = "DEPOT->C001#2"                          # flood-prone parallel edge from the sample world
+    # force heavy rain -> flood
+    sim._rain = 0.9
+    sim._update_weather(s)
+    assert s.road_graph.get_edge(fp).status == EdgeStatus.FLOODED
+    assert s.road_graph.get_edge(fp).flood_level == 0.5
+    # force dry -> the weather-owned edge recovers to OPEN
+    sim._rain = 0.1
+    sim._update_weather(s)
+    assert s.road_graph.get_edge(fp).status == EdgeStatus.OPEN
+    assert s.road_graph.get_edge(fp).flood_level == 0.0
+
+
+def test_weather_does_not_touch_injected_flood_on_other_edges():
+    s = build_sample_state()
+    sim = WorldSimulator(load_settings())
+    # presenter injects a flood on a NON-flood-prone edge
+    inj = s.road_graph.get_edge("DEPOT->C002")
+    inj.status = EdgeStatus.FLOODED
+    inj.flood_level = 0.8
+    sim._rain = 0.1                               # dry: weather would un-flood its own edges
+    sim._update_weather(s)
+    assert inj.status == EdgeStatus.FLOODED       # injected edge untouched
+    assert inj.flood_level == 0.8

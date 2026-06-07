@@ -181,6 +181,29 @@ class WorldSimulator:
             if edge.status == EdgeStatus.OPEN:
                 edge.traffic_factor = factor
 
+    def _update_weather(self, state: WorldState) -> None:
+        """Flood-prone edges (those starting flooded / with a baseline flood_level)
+        flood when rain >= threshold and recover when it drops. Only edges weather
+        itself owns are toggled, so presenter-injected floods elsewhere are safe."""
+        if self._flood_prone is None:
+            self._flood_prone = {
+                eid for eid, e in state.road_graph.edges.items()
+                if e.flood_level > 0.0 or e.status == EdgeStatus.FLOODED
+            }
+        flooding = self._rain >= self.settings.weather_flood_threshold
+        for eid in self._flood_prone:
+            edge = state.road_graph.get_edge(eid)
+            if edge is None:
+                continue
+            if flooding:
+                edge.status = EdgeStatus.FLOODED
+                edge.flood_level = self.settings.weather_flood_level
+                self._weather_flooded.add(eid)
+            elif eid in self._weather_flooded:
+                edge.status = EdgeStatus.OPEN
+                edge.flood_level = 0.0
+                self._weather_flooded.discard(eid)
+
     def _generate_demand(self, state: WorldState) -> None:
         if not state.depot.inventory:
             return
