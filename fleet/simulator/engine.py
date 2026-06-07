@@ -37,6 +37,17 @@ def _trend_factor(days_elapsed: float, trend_per_day: float) -> float:
     return max(0.0, 1.0 + trend_per_day * days_elapsed)
 
 
+def _traffic_factor_for_hour(hour: int, peak_factor: float) -> float:
+    """Rush-hour congestion multiplier. Peaks (peak_factor) in the morning/evening
+    commute, mild at midday, free-flow (1.0) overnight. Caller keeps peak_factor
+    below settings.traffic_alert_factor so normal rush hour is not a TRAFFIC alert."""
+    if 6 <= hour < 10 or 16 <= hour < 20:
+        return peak_factor
+    if 10 <= hour < 16:
+        return 1.0 + 0.4 * (peak_factor - 1.0)   # ~midday, between free-flow and peak
+    return 1.0
+
+
 _BASE_RATE_PER_HOUR = {
     "supermarket": 8.0,
     "market": 12.0,
