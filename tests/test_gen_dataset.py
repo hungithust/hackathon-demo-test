@@ -36,3 +36,20 @@ def test_build_dataset_is_deterministic(tmp_path):
                       holdout_frac=0.5, use_teacher=False)
     assert (Path(tmp_path / "a" / "train.jsonl").read_text()
             == Path(tmp_path / "b" / "train.jsonl").read_text())
+
+
+def test_build_dataset_dpo_writes_prefs(tmp_path):
+    from scripts.gen_dataset import build_dataset
+    settings = load_settings({})
+    out = build_dataset(settings, n_seeds=2, out_dir=str(tmp_path),
+                        holdout_frac=0.5, use_teacher=False, dpo=True)
+
+    prefs = Path(tmp_path) / "prefs.jsonl"
+    assert prefs.exists()
+    rows = [json.loads(l) for l in prefs.read_text().splitlines() if l]
+    assert rows, "expected at least one preference pair"
+    r = rows[0]
+    assert set(r) == {"system", "user", "chosen", "rejected"}
+    assert set(r["chosen"]) == {"action", "reasoning", "added_delay_min"}
+    assert r["chosen"]["action"] != r["rejected"]["action"]   # informative pair
+    assert out["n_prefs"] == len(rows)
