@@ -15,7 +15,7 @@ với cấu hình mặc định (rule-based + OR-Tools CPU + transcriber rỗng)
 | Luồng headless | `python -m fleet.loop` | ✅ chạy 10 tick, auto-apply quyết định reroute |
 | Bản đồ thực (WORLD=real) | dựng `SimulationController` | ✅ 18 khách hàng · 38 tuyến · 3 xe |
 | Đồ thị OSM | `data/hcm_drive.graphml` | ✅ đã có sẵn (73 MB) |
-| UI Streamlit | `fleet/ui/app.py` | ✅ parse/import OK |
+| UI Control Room | `fleet/ui/server.py` + `fleet/ui/web/` | ✅ FastAPI + React |
 | Python | `.venv` | 3.12.3 |
 
 > Tất cả phụ thuộc lõi cần cho checkpoint **đã được cài trong `.venv`**
@@ -87,22 +87,23 @@ python -m fleet.loop
 In ra mỗi tick: sự kiện đang hoạt động, quyết định được auto-apply/đưa vào hàng
 đợi duyệt.
 
-### 3.3. Chạy UI Streamlit — bản đồ mẫu (sample)
+### 3.3. Chạy UI Control Room (FastAPI) — bản đồ mẫu (sample)
 ```powershell
-streamlit run fleet/ui/app.py
+python -m fleet.ui.server
 ```
-Mở trình duyệt ở địa chỉ Streamlit in ra (mặc định http://localhost:8501).
-Có: nút Step/Reset, bản đồ, hàng đợi duyệt quyết định, panel báo cáo sự cố.
+Mở trình duyệt ở http://127.0.0.1:8000. Control room (dark dispatch): thanh KPI +
+Play/Pause/tốc độ, Active Events (trái), bản đồ HCM + Fleet (giữa), Approval Queue +
+Field Report giọng nói/văn bản (phải). Auto-tick chạy thế giới thật qua `/api/step`.
 
 ### 3.4. Chạy UI với **bản đồ thực HCM** (WORLD=real)
 ```powershell
 # PowerShell
 $env:WORLD = "real"
-streamlit run fleet/ui/app.py
+python -m fleet.ui.server
 ```
 ```bash
 # bash
-WORLD=real streamlit run fleet/ui/app.py
+WORLD=real python -m fleet.ui.server
 ```
 Dùng đồ thị OSM thật trong `data/hcm_drive.graphml` (depot + ~18 khách hàng HCM,
 tuyến đường định tuyến thật). Nếu thiếu file đồ thị hoặc osmnx, hệ thống **tự
@@ -170,7 +171,7 @@ python scripts/fetch_osm.py
 | Triệu chứng | Cách xử lý |
 |---|---|
 | `ModuleNotFoundError` | Chưa activate venv hoặc chưa `pip install -r requirements.lock.txt` |
-| `streamlit` không nhận lệnh | Chạy `python -m streamlit run fleet/ui/app.py` trong venv |
+| `uvicorn`/`fastapi` thiếu | `pip install fastapi uvicorn` (hoặc `-r requirements.lock.txt`) |
 | Activate.ps1 bị chặn (Windows) | `Set-ExecutionPolicy -Scope Process RemoteSigned` rồi activate lại |
 | WORLD=real ra bản đồ mẫu | Thiếu/ hỏng `data/hcm_drive.graphml` → chạy `scripts/fetch_osm.py` |
 | Test fail vì cache cũ | Xóa `.pytest_cache/`, `.mypy_cache/` rồi chạy lại |

@@ -22,3 +22,5 @@ data/*.graphml
 cache/
 
 DEMO_GUIDE.txt
+# Downloaded design bundles (reference only; re-fetch from the design URL)
+design_dl/
