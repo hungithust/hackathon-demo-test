@@ -57,6 +57,9 @@ class Settings:
     riva_endpoint: str = ""           # intake: Riva ASR NIM endpoint
     whisper_model: str = "large-v3"   # intake: faster-whisper model id
     intake_extractor: str = "nim"     # intake: nim | claude (extractor transport)
+    world: str = "sample"                        # real-map: sample | real
+    osm_graphml_path: str = "data/hcm_drive.graphml"  # real-map: cached OSM graph
+    urban_speed_kmh: float = 25.0                # real-map: conservative travel-time speed
 
 
 def load_settings(env: Optional[Mapping[str, str]] = None) -> Settings:
@@ -114,4 +117,7 @@ def load_settings(env: Optional[Mapping[str, str]] = None) -> Settings:
         riva_endpoint=e.get("RIVA_ENDPOINT", ""),
         whisper_model=e.get("WHISPER_MODEL", "large-v3"),
         intake_extractor=e.get("INTAKE_EXTRACTOR", "nim"),
+        world=e.get("WORLD", "sample"),
+        osm_graphml_path=e.get("OSM_GRAPHML_PATH", "data/hcm_drive.graphml"),
+        urban_speed_kmh=float(e.get("URBAN_SPEED_KMH", "25.0")),
     )
