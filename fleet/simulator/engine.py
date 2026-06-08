@@ -81,6 +81,7 @@ class WorldSimulator:
         self._rain = 0.0                                      # M-A2: rain level in [0,1]
         self._flood_prone = None                              # M-A2: lazily-snapshotted edge ids
         self._weather_flooded: set = set()                    # M-A2: edges flooded BY weather
+        self._travel_time_cache: Dict = {}                    # cached shortest-path trees for live travel-time replay
 
     def tick(self, state: WorldState) -> None:
         state.clock += timedelta(minutes=self.settings.tick_minutes)
@@ -90,6 +91,7 @@ class WorldSimulator:
         if self._start_clock is None:
             self._start_clock = state.clock
         if not self.advance_only:
+            self._travel_time_cache.clear()
             if self.settings.enable_weather:
                 self._step_rain()
                 self._update_traffic(state)
@@ -118,6 +120,7 @@ class WorldSimulator:
         if edge is None:
             raise KeyError(f"no such edge: {edge_id}")
         edge.status = new_status
+        self._travel_time_cache.clear()
         if flood_level:
             edge.flood_level = flood_level
         if traffic_factor != 1.0:
@@ -315,8 +318,12 @@ class WorldSimulator:
             for stop in sorted(route.stops, key=lambda s: s.sequence):
                 if stop.actual_arrival is not None:
                     continue
-                dist = shortest_times_from(
-                    state.road_graph, cur_node, vehicle.wade_capability)
+                cache_key = (cur_node, float(vehicle.wade_capability))
+                dist = self._travel_time_cache.get(cache_key)
+                if dist is None:
+                    dist = shortest_times_from(
+                        state.road_graph, cur_node, vehicle.wade_capability)
+                    self._travel_time_cache[cache_key] = dist
                 if stop.customer_id not in dist:
                     break
                 arrival = cur_time + timedelta(minutes=dist[stop.customer_id])

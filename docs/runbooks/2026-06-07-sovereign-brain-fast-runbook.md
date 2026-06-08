@@ -27,6 +27,20 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
+Linux / node-07:
+
+```bash
+cd /raid/team/hackathon-demo-test
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+```
+
+Nếu không activate venv, gọi trực tiếp Python trong venv:
+
+- Windows: `.\.venv\Scripts\python.exe`
+- Linux / node-07: `./.venv/bin/python`
+
 Nếu cần NIM / OpenAI SDK / training stack:
 
 ```powershell
@@ -57,6 +71,7 @@ Lưu ý trước khi set env:
 - `CONSEQUENTIAL_DISRUPTIONS=1` là mặc định vận hành mới cho dataset/train.
 - `DECISION_ENGINE=nim` chỉ set khi endpoint NIM đã sống.
 - `ROUTING_ENGINE=cuopt` chỉ set khi endpoint cuOpt đã sống; nếu endpoint lỗi mà vẫn ép `cuopt`, runtime có thể fail.
+- Với dataset offline, ưu tiên giữ `ROUTING_ENGINE=cpu`; không cần cuOpt để sinh data nhanh.
 
 PowerShell:
 
@@ -114,9 +129,29 @@ Lưu ý trước khi sinh dataset:
 - Không dùng path baseline cho train chính thức.
 - Kết quả probe nhỏ đã tốt, nhưng vẫn phải kiểm gate trên dataset thực tế vừa sinh.
 - Nếu định train DPO, vẫn phải sinh lại bằng `--consequential --dpo`.
+- Sau bản vá tăng tốc, dataset offline có các knob mới: `--workers`, `--dataset-routing-engine`, `--consequential-horizon-min`.
+- `1 seed = 6 examples`, nên `--seeds 500` sẽ sinh ra `3000` mẫu.
+- Trên `node-07`, dùng Python trong venv và ép `--dataset-routing-engine cpu`.
 
 ```powershell
-python -m scripts.gen_dataset --seeds 20 --out data/sovereign-brain --consequential 2>&1 | Tee-Object -FilePath logs\gen-dataset.log
+.\.venv\Scripts\python.exe -m scripts.gen_dataset --seeds 500 --out data/sovereign-brain --consequential --workers 4 --dataset-routing-engine cpu --consequential-horizon-min 60 2>&1 | Tee-Object -FilePath logs\gen-dataset.log
+```
+
+```bash
+./.venv/bin/python -m scripts.gen_dataset --seeds 500 --out data/sovereign-brain --consequential --workers 4 --dataset-routing-engine cpu --consequential-horizon-min 60 2>&1 | tee logs/gen-dataset.log
+```
+
+Benchmark tham chiếu đã đo trên `node-07` sau khi pull bản vá:
+
+- `--seeds 100 --workers 1` → `600` samples trong khoảng `8.58s`
+- `--seeds 500 --workers 4` → `3000` samples trong khoảng `13.00s`
+
+Nếu muốn benchmark trước khi chạy thật:
+
+```bash
+mkdir -p logs
+/usr/bin/time -f '%E real' ./.venv/bin/python -m scripts.gen_dataset --seeds 100 --out data/bench-100 --consequential --workers 1 --dataset-routing-engine cpu --consequential-horizon-min 60 2>&1 | tee logs/gen-100.log
+/usr/bin/time -f '%E real' ./.venv/bin/python -m scripts.gen_dataset --seeds 500 --out data/bench-500-w4 --consequential --workers 4 --dataset-routing-engine cpu --consequential-horizon-min 60 2>&1 | tee logs/gen-500-w4.log
 ```
 
 ## 8. Gate tự động trước train
@@ -130,7 +165,11 @@ Lưu ý trước khi chạy gate:
 Lệnh kiểm gate:
 
 ```powershell
-python -c "import json, pathlib, sys; p=pathlib.Path('logs/gen-dataset.log'); txt=p.read_text(encoding='utf-8'); i=txt.rfind('{'); report=json.loads(txt[i:]); ok=(report.get('consequential') is True and report.get('informative_fraction',0)>=0.60 and len(report.get('event_types',{}))>=4 and report.get('n_train',0)>0 and report.get('n_test',0)>0); print(json.dumps(report, indent=2)); print('GATE=PASS' if ok else 'GATE=FAIL'); sys.exit(0 if ok else 1)"
+.\.venv\Scripts\python.exe -c "import json, pathlib, sys; p=pathlib.Path('logs/gen-dataset.log'); txt=p.read_text(encoding='utf-8'); i=txt.rfind('{'); report=json.loads(txt[i:]); ok=(report.get('consequential') is True and report.get('informative_fraction',0)>=0.60 and len(report.get('event_types',{}))>=4 and report.get('n_train',0)>0 and report.get('n_test',0)>0); print(json.dumps(report, indent=2)); print('GATE=PASS' if ok else 'GATE=FAIL'); sys.exit(0 if ok else 1)"
+```
+
+```bash
+./.venv/bin/python -c "import json, pathlib, sys; p=pathlib.Path('logs/gen-dataset.log'); txt=p.read_text(encoding='utf-8'); i=txt.rfind('{'); report=json.loads(txt[i:]); ok=(report.get('consequential') is True and report.get('informative_fraction',0)>=0.60 and len(report.get('event_types',{}))>=4 and report.get('n_train',0)>0 and report.get('n_test',0)>0); print(json.dumps(report, indent=2)); print('GATE=PASS' if ok else 'GATE=FAIL'); sys.exit(0 if ok else 1)"
 ```
 
 Chỉ đi tiếp nếu:
@@ -155,7 +194,7 @@ Lưu ý trước khi train LoRA:
 - Nếu chạy trên máy GPU chung, luôn lưu log qua `Tee-Object`.
 
 ```powershell
-python -m scripts.train_lora --train data/sovereign-brain/train.jsonl --out data/adapters/sovereign-brain 2>&1 | Tee-Object -FilePath logs\train-lora.log
+.\.venv\Scripts\python.exe -m scripts.train_lora --train data/sovereign-brain/train.jsonl --out data/adapters/sovereign-brain 2>&1 | Tee-Object -FilePath logs\train-lora.log
 ```
 
 Tuỳ chọn DPO:
@@ -166,8 +205,8 @@ Lưu ý trước khi chạy DPO:
 - `prefs.jsonl` phải được sinh lại bằng `--consequential --dpo`, không dùng file cũ.
 
 ```powershell
-python -m scripts.gen_dataset --seeds 20 --out data/sovereign-brain --consequential --dpo 2>&1 | Tee-Object -FilePath logs\gen-dataset-dpo.log
-python -m scripts.train_dpo --prefs data/sovereign-brain/prefs.jsonl --adapter data/adapters/sovereign-brain --out data/adapters/sovereign-brain-dpo 2>&1 | Tee-Object -FilePath logs\train-dpo.log
+.\.venv\Scripts\python.exe -m scripts.gen_dataset --seeds 500 --out data/sovereign-brain --consequential --dpo --workers 4 --dataset-routing-engine cpu --consequential-horizon-min 60 2>&1 | Tee-Object -FilePath logs\gen-dataset-dpo.log
+.\.venv\Scripts\python.exe -m scripts.train_dpo --prefs data/sovereign-brain/prefs.jsonl --adapter data/adapters/sovereign-brain --out data/adapters/sovereign-brain-dpo 2>&1 | Tee-Object -FilePath logs\train-dpo.log
 ```
 
 ## 11. Eval nhanh
@@ -189,6 +228,42 @@ Nếu có NIM endpoint:
 ```powershell
 python -m scripts.eval_brain --test data/sovereign-brain/test.jsonl --ticks 24 --nim-endpoint $env:NIM_ENDPOINT 2>&1 | Tee-Object -FilePath logs\eval-nim.log
 ```
+
+## 11b. Voice intake demo (tùy chọn, mặc định TẮT)
+
+Báo cáo sự cố bằng giọng nói/văn bản → tiêm `Event` vào world đang chạy. Chi tiết
+đầy đủ ở runbook kỹ thuật **Mục 16**.
+
+Lưu ý trước khi bật:
+
+- Mặc định TẮT: không set `ASR_ENGINE`/`NIM_ENDPOINT` thì panel chỉ dùng ô gõ text.
+- Suite test không import `streamlit/torch/whisper/openai/riva`; chỉ cần khi chạy live.
+- Extractor `nim` tái dùng đúng `NIM_ENDPOINT` ở mục 5.
+
+Smoke không cần model:
+
+```powershell
+pytest tests/test_intake_resolver.py tests/test_intake_extractor.py tests/test_intake_asr.py tests/test_intake_controller.py -q
+```
+
+Chạy live text-only (an toàn nhất):
+
+```powershell
+$env:DECISION_ENGINE="nim"
+$env:NIM_ENDPOINT="http://host:8000/v1"
+python -m streamlit run fleet/ui/app.py --server.port 8501
+```
+
+Có giọng nói (Whisper self-host):
+
+```powershell
+$env:ASR_ENGINE="whisper"
+$env:WHISPER_MODEL="large-v3"
+python -m streamlit run fleet/ui/app.py --server.port 8501
+```
+
+Panel "Báo cáo sự cố": gõ `kho C001 het hang` → **Bóc tách & xử lý** → thấy report
+được tiêm + thẻ quyết định. Không có transport thì panel báo lỗi rõ ràng (degrade OK).
 
 ## 12. Kiểm soát log
 

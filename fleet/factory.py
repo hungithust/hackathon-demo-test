@@ -22,6 +22,7 @@ from fleet.agent.scoring_engine import ScoringEngine
 from fleet.agent.claude_agent import ClaudeAgent
 from fleet.agent.nim_agent import NimAgent
 from fleet.dispatch.dispatcher import Dispatcher as DispatcherImpl
+from fleet.intake.asr import NullTranscriber, WhisperTranscriber, RivaTranscriber
 
 
 @dataclass
@@ -97,3 +98,13 @@ def build_components(settings) -> Components:
         decision_engine=decision_engine,
         dispatcher=DispatcherImpl(),
     )
+
+
+def build_transcriber(settings):
+    """Select the ASR impl. Defaults to NullTranscriber (text-only) so the
+    feature is OFF unless ASR_ENGINE is set."""
+    if settings.asr_engine == "whisper":
+        return WhisperTranscriber(settings)
+    if settings.asr_engine == "riva" and getattr(settings, "riva_endpoint", ""):
+        return RivaTranscriber(settings)
+    return NullTranscriber()

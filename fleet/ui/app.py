@@ -7,8 +7,73 @@ Streamlit is imported here and nowhere else, so the headless system and the test
 suite never depend on it."""
 
 import streamlit as st
+import pydeck as pdk
 
 from fleet.ui.controller import SimulationController
+from fleet.intake.controller import IntakeController
+from fleet.factory import build_transcriber
+
+
+def render_map(snap) -> None:
+    depot = snap["depot"]
+    view = pdk.ViewState(latitude=depot["lat"], longitude=depot["lng"],
+                         zoom=12, pitch=0)
+    layers = []
+    if snap["routes"]:
+        layers.append(pdk.Layer(
+            "PathLayer", data=snap["routes"], get_path="path",
+            get_color=[30, 120, 220], width_min_pixels=3, pickable=True))
+    layers.append(pdk.Layer(
+        "ScatterplotLayer",
+        data=[{"position": [depot["lng"], depot["lat"]], "name": depot["name"]}],
+        get_position="position", get_fill_color=[240, 190, 20],
+        get_radius=180, pickable=True))
+    layers.append(pdk.Layer(
+        "ScatterplotLayer",
+        data=[{"position": [c["lng"], c["lat"]], "name": c["name"]}
+              for c in snap["customers"]],
+        get_position="position", get_fill_color=[30, 130, 230],
+        get_radius=110, pickable=True))
+    layers.append(pdk.Layer(
+        "ScatterplotLayer",
+        data=[{"position": [v["lng"], v["lat"]], "name": v["id"]}
+              for v in snap["vehicles"]],
+        get_position="position", get_fill_color=[220, 50, 50],
+        get_radius=90, pickable=True))
+    st.pydeck_chart(pdk.Deck(layers=layers, initial_view_state=view,
+                             tooltip={"text": "{name}"}))
+
+
+def render_intake_panel(controller) -> None:
+    st.subheader("Báo cáo sự cố (giọng nói / văn bản)")
+    audio = st.audio_input("Nói mô tả sự cố")               # mic
+    uploaded = st.file_uploader("…hoặc tải file âm thanh", type=["wav", "mp3", "m4a"])
+    text = st.text_area("…hoặc gõ mô tả", placeholder="VD: đường vào C001 ngập, xe 3 hỏng")
+
+    if st.button("Bóc tách & xử lý"):
+        ic = IntakeController(controller,
+                              transcriber=build_transcriber(controller.settings))
+        audio_bytes = None
+        if audio is not None:
+            audio_bytes = audio.getvalue()
+        elif uploaded is not None:
+            audio_bytes = uploaded.getvalue()
+        try:
+            result = ic.report(text=text or None, audio=audio_bytes)
+        except Exception as exc:                            # ASR/extractor failure
+            st.error(f"Không xử lý được báo cáo: {exc}")
+            return
+
+        if result.raw_text:
+            st.caption(f"Đã nghe/đọc: “{result.raw_text}”")
+        if not result.reports:
+            st.warning("Không bóc tách được sự cố nào hợp lệ. Hãy nói/gõ rõ hơn.")
+        for r in result.reports:
+            st.success(f"➕ {r.event_type.value} · {r.target} · {r.severity.value}")
+        for d in result.decisions:
+            with st.container(border=True):
+                st.markdown(f"**Quyết định:** {d['action']} — {d.get('description','')}")
+                st.caption(f"+{d.get('added_delay_min', 0)} phút")
 
 
 def _controller() -> SimulationController:
@@ -42,11 +107,11 @@ def main() -> None:
     m3.metric("Pending orders", snap["pending_orders"])
     m4.metric("Pending decisions", snap["decisions"]["pending"])
 
-    # --- vehicles map + table ---
-    st.subheader("Vehicles")
+    # --- map: real routes + depot/customers/vehicles ---
+    st.subheader("Bản đồ")
+    render_map(snap)
     veh = snap["vehicles"]
     if veh:
-        st.map([{"lat": v["lat"], "lon": v["lng"]} for v in veh])
         st.dataframe(veh, use_container_width=True)
 
     # --- active events ---
@@ -70,6 +135,9 @@ def main() -> None:
         if cols[2].button("Reject", key=f"rj_{d['id']}"):
             ctrl.reject(d["id"])
             st.rerun()
+
+    # --- field-report intake ---
+    render_intake_panel(ctrl)
 
 
 if __name__ == "__main__":

@@ -63,3 +63,17 @@ def test_build_dataset_consequential_improves_multi_event_coverage(tmp_path):
     assert out["consequential"] is True
     assert len(out["event_types"]) >= 4
     assert out["informative_fraction"] > 0.5
+
+
+def test_build_dataset_reports_runtime_knobs(tmp_path):
+    from scripts.gen_dataset import build_dataset
+    settings = load_settings({
+        "ROUTING_ENGINE": "cpu",
+        "CONSEQUENTIAL_MIN_HORIZON_TICKS": "24",
+    })
+    out = build_dataset(settings, n_seeds=1, out_dir=str(tmp_path),
+                        holdout_frac=0.5, use_teacher=False, consequential=True,
+                        workers=1)
+    assert out["workers"] == 1
+    assert out["routing_engine"] == "cpu"
+    assert out["consequential_min_horizon_ticks"] == 24

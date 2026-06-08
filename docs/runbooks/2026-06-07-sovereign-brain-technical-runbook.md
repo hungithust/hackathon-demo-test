@@ -54,6 +54,7 @@ Các biến đang có và thực sự được code đọc:
 - `NIM_ENDPOINT`
 - `NIM_MODEL`
 - `ORACLE_HORIZON_TICKS`
+- `CONSEQUENTIAL_MIN_HORIZON_TICKS`
 - `ORACLE_MIN_GAP`
 - `ENABLE_TRAVEL_TIME`
 
@@ -62,6 +63,8 @@ Các biến đang có và thực sự được code đọc:
 - `ENABLE_TRAVEL_TIME` không cần bật tay khi chạy `--consequential`; grading path tự bật trên clone.
 - `CONSEQUENTIAL_DISRUPTIONS=1` có thể dùng để ép `scripts.gen_dataset` chạy path mới ngay cả khi quên cờ CLI.
 - `advance_only` là cờ nội bộ grading, không phải env public.
+- `CONSEQUENTIAL_MIN_HORIZON_TICKS` là knob mới cho consequential grading; mặc định `60`.
+- `scripts.gen_dataset` có CLI mới: `--workers`, `--dataset-routing-engine`, `--consequential-horizon-min`.
 
 ## 4. Root cause kỹ thuật của lỗi oracle cũ
 
@@ -126,6 +129,17 @@ cd d:\hackathon
 python --version
 pip show ortools
 ```
+
+Linux / node-07:
+
+```bash
+cd /raid/team/hackathon-demo-test
+source .venv/bin/activate
+python --version
+pip show ortools
+```
+
+Nếu không activate, dùng trực tiếp `./.venv/bin/python`.
 
 Nếu dùng NIM:
 
@@ -226,6 +240,7 @@ Lưu ý:
 
 ```powershell
 $env:ORACLE_HORIZON_TICKS="12"
+$env:CONSEQUENTIAL_MIN_HORIZON_TICKS="60"
 $env:ORACLE_MIN_GAP="1.0"
 $env:CONSEQUENTIAL_DISRUPTIONS="1"
 ```
@@ -237,10 +252,35 @@ Lưu ý:
 - Không dùng baseline path để sinh dataset train chính thức.
 - `--consequential` là bắt buộc cho train/eval oracle đa lớp.
 - Nếu chạy lại nhiều lần, nên đổi thư mục output hoặc xoá có chủ đích để tránh đọc nhầm file cũ.
+- Sau bản vá tăng tốc, ưu tiên chạy dataset offline bằng CPU: `--dataset-routing-engine cpu`.
+- `1 seed = 6 examples`; muốn ~`3000` samples thì dùng `--seeds 500`.
 
 ```powershell
-python -m scripts.gen_dataset --seeds 20 --out data/sovereign-brain --consequential 2>&1 | Tee-Object -FilePath logs\gen-dataset.log
+.\.venv\Scripts\python.exe -m scripts.gen_dataset --seeds 500 --out data/sovereign-brain --consequential --workers 4 --dataset-routing-engine cpu --consequential-horizon-min 60 2>&1 | Tee-Object -FilePath logs\gen-dataset.log
 ```
+
+```bash
+./.venv/bin/python -m scripts.gen_dataset --seeds 500 --out data/sovereign-brain --consequential --workers 4 --dataset-routing-engine cpu --consequential-horizon-min 60 2>&1 | tee logs/gen-dataset.log
+```
+
+### 8.2b Benchmark / regression check trên node-07
+
+Lưu ý:
+
+- Chạy benchmark sau khi pull code mới nếu nghi dataset lại chậm bất thường.
+- Luôn kiểm tra `routing_engine` ở cuối report; nếu hiện `cuopt`, nghĩa là đang benchmark sai path.
+- `workers=1` dùng để đo baseline; `workers=4` là cấu hình thực tế đã đo tốt.
+
+```bash
+mkdir -p logs
+/usr/bin/time -f '%E real' ./.venv/bin/python -m scripts.gen_dataset --seeds 100 --out data/bench-100 --consequential --workers 1 --dataset-routing-engine cpu --consequential-horizon-min 60 2>&1 | tee logs/gen-100.log
+/usr/bin/time -f '%E real' ./.venv/bin/python -m scripts.gen_dataset --seeds 500 --out data/bench-500-w4 --consequential --workers 4 --dataset-routing-engine cpu --consequential-horizon-min 60 2>&1 | tee logs/gen-500-w4.log
+```
+
+Tham chiếu đã đo trên `node-07` sau bản vá:
+
+- `100` seeds → `600` samples trong khoảng `8.58s`
+- `500` seeds + `workers=4` → `3000` samples trong khoảng `13.00s`
 
 ### 8.3 Gate bắt buộc
 
@@ -253,7 +293,11 @@ Lưu ý:
 Lệnh gate tự động:
 
 ```powershell
-python -c "import json, pathlib, sys; p=pathlib.Path('logs/gen-dataset.log'); txt=p.read_text(encoding='utf-8'); i=txt.rfind('{'); report=json.loads(txt[i:]); checks={'consequential': report.get('consequential') is True, 'informative_fraction': report.get('informative_fraction',0)>=0.60, 'event_types': len(report.get('event_types',{}))>=4, 'n_train': report.get('n_train',0)>0, 'n_test': report.get('n_test',0)>0}; print(json.dumps({'report':report,'checks':checks}, indent=2)); ok=all(checks.values()); print('GATE=PASS' if ok else 'GATE=FAIL'); sys.exit(0 if ok else 1)"
+.\.venv\Scripts\python.exe -c "import json, pathlib, sys; p=pathlib.Path('logs/gen-dataset.log'); txt=p.read_text(encoding='utf-8'); i=txt.rfind('{'); report=json.loads(txt[i:]); checks={'consequential': report.get('consequential') is True, 'informative_fraction': report.get('informative_fraction',0)>=0.60, 'event_types': len(report.get('event_types',{}))>=4, 'n_train': report.get('n_train',0)>0, 'n_test': report.get('n_test',0)>0}; print(json.dumps({'report':report,'checks':checks}, indent=2)); ok=all(checks.values()); print('GATE=PASS' if ok else 'GATE=FAIL'); sys.exit(0 if ok else 1)"
+```
+
+```bash
+./.venv/bin/python -c "import json, pathlib, sys; p=pathlib.Path('logs/gen-dataset.log'); txt=p.read_text(encoding='utf-8'); i=txt.rfind('{'); report=json.loads(txt[i:]); checks={'consequential': report.get('consequential') is True, 'informative_fraction': report.get('informative_fraction',0)>=0.60, 'event_types': len(report.get('event_types',{}))>=4, 'n_train': report.get('n_train',0)>0, 'n_test': report.get('n_test',0)>0}; print(json.dumps({'report':report,'checks':checks}, indent=2)); ok=all(checks.values()); print('GATE=PASS' if ok else 'GATE=FAIL'); sys.exit(0 if ok else 1)"
 ```
 
 Đi tiếp chỉ khi:
@@ -277,7 +321,7 @@ Lưu ý:
 - Nếu máy GPU dùng chung, theo dõi dung lượng và checkpoint output ngay từ đầu.
 
 ```powershell
-python -m scripts.train_lora --train data/sovereign-brain/train.jsonl --out data/adapters/sovereign-brain 2>&1 | Tee-Object -FilePath logs\train-lora.log
+.\.venv\Scripts\python.exe -m scripts.train_lora --train data/sovereign-brain/train.jsonl --out data/adapters/sovereign-brain 2>&1 | Tee-Object -FilePath logs\train-lora.log
 ```
 
 Theo dõi:
@@ -293,8 +337,8 @@ Lưu ý:
 - `prefs.jsonl` phải được regen từ consequential path cùng cấu hình hiện hành.
 
 ```powershell
-python -m scripts.gen_dataset --seeds 20 --out data/sovereign-brain --consequential --dpo 2>&1 | Tee-Object -FilePath logs\gen-dataset-dpo.log
-python -m scripts.train_dpo --prefs data/sovereign-brain/prefs.jsonl --adapter data/adapters/sovereign-brain --out data/adapters/sovereign-brain-dpo 2>&1 | Tee-Object -FilePath logs\train-dpo.log
+.\.venv\Scripts\python.exe -m scripts.gen_dataset --seeds 500 --out data/sovereign-brain --consequential --dpo --workers 4 --dataset-routing-engine cpu --consequential-horizon-min 60 2>&1 | Tee-Object -FilePath logs\gen-dataset-dpo.log
+.\.venv\Scripts\python.exe -m scripts.train_dpo --prefs data/sovereign-brain/prefs.jsonl --adapter data/adapters/sovereign-brain --out data/adapters/sovereign-brain-dpo 2>&1 | Tee-Object -FilePath logs\train-dpo.log
 ```
 
 Chỉ chạy DPO nếu dataset gate đã pass. Nếu không, preference pairs sẽ vô nghĩa.
@@ -403,3 +447,96 @@ Dừng ngay và không train nếu một trong các điều kiện sau xảy ra:
   5. train LoRA
   6. sinh `prefs.jsonl` bằng `--consequential --dpo` nếu cần DPO
   7. eval
+
+## 16. Voice Disruption Intake — vận hành trên node-07
+
+Tính năng intake (`fleet/intake/`) biến một báo cáo sự cố **nói hoặc gõ** thành
+`Event` được tiêm vào world đang chạy, để pipeline detect→decide→reroute phản ứng
+ngay trên màn hình. Phần này dành cho người trực node-07 chạy bản **live**.
+
+### 16.1 Nguyên tắc bất biến
+
+- Tính năng **mặc định TẮT**: không có `ASR_ENGINE`/`NIM_ENDPOINT` thì hệ chạy y
+  như cũ, `build_transcriber` trả `NullTranscriber` (chỉ ô gõ text dùng được).
+- Suite test **không** import `streamlit/torch/whisper/openai/riva`; mọi transport
+  (ASR + extractor) đều lazy-import, chỉ nạp khi thực sự bật.
+- Không đổi chữ ký `inject_event` / `disrupt_edge` / `run_loop`.
+- Edge event (`traffic`, `flooded_area`) đi qua `disrupt_edge` (đổi ma trận
+  routing thật); node/vehicle event đi qua `inject_event`.
+
+### 16.2 Kiểm tra tài nguyên trước khi chạy live (non-blocking cho text path)
+
+- Riva ASR NIM: xác nhận có thể pull được image; nếu không, giữ `ASR_ENGINE=whisper`.
+- `faster-whisper` kéo được `large-v3` về `/raid` (cache model).
+- Mở được một web port để demo Streamlit.
+- Toàn bộ suite và path **text-only** không cần bất kỳ thứ nào ở trên.
+
+### 16.3 Cài optional deps (chỉ khi bật live)
+
+```bash
+# extractor transport (NIM OpenAI-compatible) — thường đã có sẵn từ NIM path
+pip install openai
+# ASR self-host (khuyến nghị, tiếng Việt khỏe, không cần entitlement NGC)
+pip install faster-whisper
+# ASR premium qua Riva NIM (tùy chọn)
+pip install nvidia-riva-client
+```
+
+### 16.4 Env vars
+
+| Var | Giá trị | Ý nghĩa |
+|-----|---------|---------|
+| `ASR_ENGINE` | `none` (mặc định) \| `whisper` \| `riva` | chọn engine audio→text |
+| `WHISPER_MODEL` | `large-v3` (mặc định) | model id cho faster-whisper |
+| `RIVA_ENDPOINT` | vd `localhost:50051` | endpoint Riva ASR NIM |
+| `INTAKE_EXTRACTOR` | `nim` (mặc định) \| `claude` | transport bóc tách event |
+| `NIM_ENDPOINT` | vd `http://localhost:8000/v1` | tái dùng cho extractor khi `nim` |
+| `NIM_MODEL` | `nvidia/llama-3.1-nemotron-nano-8b-v1` | model NIM phục vụ |
+
+Extractor `nim` tái dùng đúng endpoint Nemotron NIM đã deploy ở mục 7.3 — không
+cần dựng thêm dịch vụ.
+
+### 16.5 Chạy live (text-only — an toàn nhất, không cần ASR)
+
+```bash
+DECISION_ENGINE=nim \
+NIM_ENDPOINT=http://localhost:8000/v1 \
+python -m streamlit run fleet/ui/app.py --server.port 8501
+```
+
+Trong panel "Báo cáo sự cố", gõ `kho C001 het hang` → bấm **Bóc tách & xử lý**:
+phải thấy transcript/echo, report được tiêm, và một thẻ quyết định
+(`action` + mô tả + phút trễ). Nếu chưa cấu hình transport, panel báo lỗi rõ
+ràng — đây là degrade-gracefully đúng thiết kế.
+
+### 16.6 Chạy live có giọng nói (Whisper self-host)
+
+```bash
+ASR_ENGINE=whisper \
+WHISPER_MODEL=large-v3 \
+DECISION_ENGINE=nim \
+NIM_ENDPOINT=http://localhost:8000/v1 \
+python -m streamlit run fleet/ui/app.py --server.port 8501
+```
+
+Dùng mic (`st.audio_input`) hoặc upload file `wav/mp3/m4a`. Lần đầu sẽ tải model
+`large-v3` về cache (chậm); các lần sau nhanh. Nếu muốn ASR premium:
+`ASR_ENGINE=riva RIVA_ENDPOINT=localhost:50051`.
+
+### 16.7 Smoke không cần model (xác nhận code path trước khi bật live)
+
+```bash
+python -m pytest -q tests/test_intake_resolver.py tests/test_intake_extractor.py \
+  tests/test_intake_asr.py tests/test_intake_controller.py tests/test_factory.py
+```
+
+Phải xanh và **không** kéo theo `streamlit/torch/whisper/openai/riva`.
+
+### 16.8 Quy tắc dừng cho intake
+
+Dừng và quay lại text-only path nếu:
+
+- Whisper không tải được `large-v3` hoặc OOM GPU → `ASR_ENGINE=whisper` thất bại.
+- Riva NIM không pull/khởi động được → bỏ `riva`, dùng `whisper` hoặc text.
+- Extractor toàn trả rỗng/`reports=[]` → kiểm `NIM_ENDPOINT`/`NIM_MODEL` khớp
+  server, vì parse fail bị nuốt và trả `IntakeResult` rỗng (không crash).
