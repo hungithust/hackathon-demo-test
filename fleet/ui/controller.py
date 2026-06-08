@@ -27,7 +27,48 @@ class SimulationController:
             self.state = self._load_real_world()
         else:
             self.state = build_sample_state()
+            self.geometry = self._generate_synthetic_geometry(self.state)
         self.components = build_components(self.settings)
+
+    def _generate_synthetic_geometry(self, state):
+        import math, random
+        geom = {}
+        for edge in state.road_graph.edges.values():
+            if edge.id in geom: continue
+            
+            n1 = state.road_graph.nodes[edge.from_node]
+            n2 = state.road_graph.nodes[edge.to_node]
+            lat1, lng1 = n1.location.lat, n1.location.lng
+            lat2, lng2 = n2.location.lat, n2.location.lng
+            
+            pts = [(lat1, lng1)]
+            dx, dy = lat2 - lat1, lng2 - lng1
+            dist = math.hypot(dx, dy)
+            if dist > 0.001:
+                ox, oy = -dy, dx
+                # Deterministic random offset per edge
+                rng = random.Random(hash(edge.from_node + edge.to_node))
+                offset = (rng.random() - 0.5) * 0.5 * dist
+                
+                mid_lat = lat1 + dx/2 + ox * offset
+                mid_lng = lng1 + dy/2 + oy * offset
+                
+                q1_lat = lat1 + (mid_lat-lat1)/2 + ox * offset * 0.5
+                q1_lng = lng1 + (mid_lng-lng1)/2 + oy * offset * 0.5
+                
+                q3_lat = mid_lat + (lat2-mid_lat)/2 - ox * offset * 0.5
+                q3_lng = mid_lng + (lng2-mid_lng)/2 - oy * offset * 0.5
+                
+                pts.extend([(q1_lat, q1_lng), (mid_lat, mid_lng), (q3_lat, q3_lng)])
+                
+            pts.append((lat2, lng2))
+            geom[edge.id] = pts
+            
+            # Reverse edge
+            rev_id = f"{edge.to_node}->{edge.from_node}"
+            geom[rev_id] = list(reversed(pts))
+            
+        return geom
 
     def _load_real_world(self):
         """Build the real-map world, falling back to the sample world (and leaving

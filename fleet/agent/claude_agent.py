@@ -49,7 +49,14 @@ _SYSTEM = (
     "protects on-time delivery and safety, and estimate the delay it adds. "
     "Available actions: "
     + ", ".join(a.value for a in DecisionAction)
-    + ". Respond using the provided JSON schema only."
+    + ". "
+    "GUIDELINES:\n"
+    "- Use 'reroute' to find a new path around traffic or flooded areas.\n"
+    "- Use 'reallocate' or 'reschedule' for vehicle breakdowns.\n"
+    "- Use 'accelerate' for urgent orders.\n"
+    "- Use 'defer' for inventory shortages.\n"
+    "- Avoid 'cancel' unless the situation is completely unrecoverable (e.g., all roads blocked).\n"
+    "Respond using the provided JSON schema only."
 )
 
 

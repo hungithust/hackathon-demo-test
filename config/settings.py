@@ -55,8 +55,8 @@ class Settings:
     oracle_horizon_ticks: int = 12        # M-A(SBv2): ticks to roll a candidate action forward before grading
     consequential_min_horizon_ticks: int = 60  # M-F(SBv2): minimum grading horizon for consequential dataset generation
     oracle_min_gap: float = 1.0           # M-B(SBv2): min best/worst realized-cost gap to keep an example (else no signal)
-    nim_endpoint: str = ""                # M-C(SBv2): OpenAI-compatible NIM endpoint (empty -> NimAgent disabled)
-    nim_model: str = "nvidia/llama-3.1-nemotron-nano-8b-v1"  # M-C(SBv2): served NIM model id
+    nim_endpoint: str = "http://localhost:8002/v1"                # M-C(SBv2): OpenAI-compatible NIM endpoint (empty -> NimAgent disabled)
+    nim_model: str = "sovereign-brain"  # M-C(SBv2): served NIM model id
     asr_engine: str = "none"          # intake: none | whisper | riva
     riva_endpoint: str = ""           # intake: Riva ASR NIM endpoint
     whisper_model: str = "large-v3"   # intake: faster-whisper model id
@@ -120,8 +120,8 @@ def load_settings(env: Optional[Mapping[str, str]] = None) -> Settings:
         consequential_min_horizon_ticks=int(
             e.get("CONSEQUENTIAL_MIN_HORIZON_TICKS", "60")),
         oracle_min_gap=float(e.get("ORACLE_MIN_GAP", "1.0")),
-        nim_endpoint=e.get("NIM_ENDPOINT", ""),
-        nim_model=e.get("NIM_MODEL", "nvidia/llama-3.1-nemotron-nano-8b-v1"),
+        nim_endpoint=e.get("NIM_ENDPOINT", "http://localhost:8002/v1"),
+        nim_model=e.get("NIM_MODEL", "sovereign-brain"),
         asr_engine=e.get("ASR_ENGINE", "none"),
         riva_endpoint=e.get("RIVA_ENDPOINT", ""),
         whisper_model=e.get("WHISPER_MODEL", "large-v3"),

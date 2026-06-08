@@ -72,19 +72,46 @@ class NimAgent:
                 "configure an endpoint or inject a `complete` callable.")
 
         import json
-        from openai import OpenAI  # optional dep
+        import requests
 
-        client = OpenAI(base_url=endpoint, api_key="not-needed")
         model = getattr(self.settings, "nim_model", "") or ""
 
         def complete(system: str, user: str) -> dict:
-            resp = client.chat.completions.create(
-                model=model,
-                messages=[{"role": "system", "content": system},
-                          {"role": "user", "content": user}],
-                temperature=0.0,
-                extra_body={"nvext": {"guided_json": _DECISION_SCHEMA}},
-            )
-            return json.loads(resp.choices[0].message.content)
+            url = endpoint.rstrip("/") + "/chat/completions"
+            payload = {
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user}
+                ],
+                "temperature": 0.0
+            }
+            # Only add guided decoding if it's explicitly a NIM model, but to be safe 
+            # and universally compatible, we'll just ask for JSON via prompt structure.
+            # The system prompt from claude_agent already strictly asks for JSON.
+            resp = requests.post(url, json=payload, timeout=30)
+            resp.raise_for_status()
+            
+            data = resp.json()
+            
+            # --- Added Logging ---
+            print("\n" + "="*50)
+            print("[NimAgent] RAW API RESPONSE FROM LOCAL MODEL:")
+            print(json.dumps(data, indent=2))
+            print("="*50 + "\n")
+            # ---------------------
+            
+            content = data["choices"][0]["message"]["content"]
+            
+            # Clean up potential markdown fences
+            content = content.strip()
+            if content.startswith("```json"):
+                content = content[7:]
+            if content.startswith("```"):
+                content = content[3:]
+            if content.endswith("```"):
+                content = content[:-3]
+                
+            return json.loads(content)
 
         return complete

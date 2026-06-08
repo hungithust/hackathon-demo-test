@@ -25,6 +25,7 @@ def format_chat_example(record: dict) -> dict:
 def parse_args(argv=None):
     p = argparse.ArgumentParser()
     p.add_argument("--train", required=True, help="train.jsonl from gen_dataset")
+    p.add_argument("--test", default=None, help="test.jsonl for evaluation")
     p.add_argument("--out", default="/raid/team/adapters/sovereign-brain")
     p.add_argument("--base-model", dest="base_model",
                    default="nvidia/Llama-3.1-Nemotron-Nano-8B-v1")
@@ -52,9 +53,10 @@ def main():
     from trl import SFTTrainer, SFTConfig
 
     ds = Dataset.from_list(_load_examples(args.train))
+    eval_ds = Dataset.from_list(_load_examples(args.test)) if args.test else None
     tokenizer = AutoTokenizer.from_pretrained(args.base_model)
     model = AutoModelForCausalLM.from_pretrained(
-        args.base_model, torch_dtype=torch.bfloat16, device_map="auto")
+        args.base_model, torch_dtype=torch.bfloat16, device_map=None)
 
     peft_config = LoraConfig(
         r=args.lora_r, lora_alpha=args.lora_alpha, lora_dropout=0.05,
@@ -62,11 +64,17 @@ def main():
     sft_config = SFTConfig(
         output_dir=args.out, num_train_epochs=args.epochs,
         per_device_train_batch_size=args.batch, learning_rate=args.lr,
-        bf16=True, logging_steps=10, save_strategy="epoch", seed=args.seed)
+        bf16=True, logging_steps=10, save_strategy="epoch", seed=args.seed,
+        eval_strategy="epoch" if args.test else "no",
+        load_best_model_at_end=True if args.test else False,
+        metric_for_best_model="eval_loss" if args.test else None)
+
+    from transformers import EarlyStoppingCallback
+    callbacks = [EarlyStoppingCallback(early_stopping_patience=3)] if args.test else None
 
     trainer = SFTTrainer(
-        model=model, args=sft_config, train_dataset=ds,
-        peft_config=peft_config, processing_class=tokenizer)
+        model=model, args=sft_config, train_dataset=ds, eval_dataset=eval_ds,
+        peft_config=peft_config, processing_class=tokenizer, callbacks=callbacks)
     trainer.train()
     trainer.save_model(args.out)
     print(f"adapter saved to {args.out}")

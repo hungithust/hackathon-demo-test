@@ -64,7 +64,6 @@ def to_cuopt_request(problem: RoutingProblem) -> dict:
 
     return {
         "cost_matrix_data": {"data": matrices},
-        "travel_time_matrix_data": {"data": matrices},
         "task_data": {
             "task_locations": task_locations,
             "demand": [demand_row],
@@ -159,14 +158,48 @@ class CuOptAdapter:
                 "CuOptAdapter has no transport and settings.cuopt_endpoint is "
                 "empty; configure a cuOpt server or inject a transport.")
 
-        from cuopt_sh_client import CuOptServiceSelfHostClient  # optional dep
-
         # endpoint formatted as "host:port" (e.g. "localhost:5000")
         host, _, port = endpoint.partition(":")
-        client = CuOptServiceSelfHostClient(ip=host or "localhost",
-                                            port=int(port or "5000"))
+        
+        host = host or "localhost"
+        port = int(port or "5000")
 
         def transport(request: dict) -> dict:
-            return client.get_optimized_routes(request)
+            import requests
+            import time
+
+            request_url = f"http://{host}:{port}/cuopt/request"
+            solution_url = f"http://{host}:{port}/cuopt/solution"
+
+            if "solver_config" not in request:
+                request["solver_config"] = {"time_limit": 2.0}
+
+            try:
+                # Nộp bài toán
+                response = requests.post(request_url, json=request, timeout=10)
+                response.raise_for_status()
+                req_id = response.json().get("reqId")
+            except requests.exceptions.RequestException as e:
+                raise RuntimeError(f"Lỗi khi nộp bài toán lên cuOpt API: {e}")
+
+            if not req_id:
+                raise RuntimeError("API cuOpt không trả về reqId.")
+
+            # Chờ kết quả (Polling)
+            max_retries = 30
+            for attempt in range(max_retries):
+                try:
+                    sol_response = requests.get(f"{solution_url}/{req_id}", timeout=10)
+                    sol_response.raise_for_status()
+                    sol_data = sol_response.json()
+
+                    if "response" in sol_data:
+                        return sol_data
+                except requests.exceptions.RequestException as e:
+                    raise RuntimeError(f"Lỗi khi lấy kết quả từ cuOpt API: {e}")
+
+                time.sleep(2)
+
+            raise RuntimeError("Hết thời gian chờ. Hệ thống cuOpt có thể đang quá tải.")
 
         return transport

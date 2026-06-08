@@ -99,7 +99,22 @@ class WorldSimulator:
             self._generate_demand(state)
             self._maybe_restock(state)
             self._update_shortage_events(state)
+            self._inject_sudden_events(state)
         self._advance_vehicles(state)
+
+    def _inject_sudden_events(self, state: WorldState) -> None:
+        """Randomly inject sudden traffic accidents on open edges."""
+        if getattr(self, "_last_accident_tick", None) is None:
+            self._last_accident_tick = state.sim_tick
+
+        # Every 6 ticks (e.g. 30 mins), 40% chance of sudden traffic
+        if state.sim_tick - self._last_accident_tick >= 6:
+            if self.rng.random() < 0.4:
+                open_edges = [e for e in state.road_graph.edges.values() if e.status == EdgeStatus.OPEN]
+                if open_edges:
+                    edge = self.rng.choice(open_edges)
+                    self.disrupt_edge(state, edge.id, EdgeStatus.CONGESTED, traffic_factor=4.0)
+            self._last_accident_tick = state.sim_tick
 
     def inject_event(self, state: WorldState, event_type: EventType,
                      target: str, severity: EventSeverity) -> Event:
