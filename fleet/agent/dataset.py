@@ -353,7 +353,8 @@ def grade_disrupted(simulator, state: WorldState, event: Event, settings, optimi
     """M-F grading path: freeze exogenous churn, replay live travel time, and
     re-solve when the action changes the routing problem."""
     weights = _Weights(settings)
-    horizon = max(settings.oracle_horizon_ticks, 60)
+    min_horizon = int(getattr(settings, "consequential_min_horizon_ticks", 60) or 60)
+    horizon = max(settings.oracle_horizon_ticks, min_horizon)
     results = []
     for a in candidate_actions(event.event_type):
         probe = Decision(

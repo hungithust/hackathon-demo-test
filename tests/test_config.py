@@ -148,6 +148,12 @@ def test_oracle_horizon_default_and_override():
     assert load_settings({"ORACLE_HORIZON_TICKS": "6"}).oracle_horizon_ticks == 6
 
 
+def test_consequential_horizon_default_and_override():
+    from config.settings import load_settings
+    assert load_settings({}).consequential_min_horizon_ticks == 60
+    assert load_settings({"CONSEQUENTIAL_MIN_HORIZON_TICKS": "24"}).consequential_min_horizon_ticks == 24
+
+
 def test_oracle_min_gap_default_and_override():
     from config.settings import load_settings
     assert load_settings({}).oracle_min_gap == 1.0

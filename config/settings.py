@@ -50,6 +50,7 @@ class Settings:
     score_w_drop: float = 50.0            # M-D: weight on priority-weighted dropped orders
     enable_proactive: bool = False        # M-D: emit proactive shortfall decisions
     oracle_horizon_ticks: int = 12        # M-A(SBv2): ticks to roll a candidate action forward before grading
+    consequential_min_horizon_ticks: int = 60  # M-F(SBv2): minimum grading horizon for consequential dataset generation
     oracle_min_gap: float = 1.0           # M-B(SBv2): min best/worst realized-cost gap to keep an example (else no signal)
     nim_endpoint: str = ""                # M-C(SBv2): OpenAI-compatible NIM endpoint (empty -> NimAgent disabled)
     nim_model: str = "nvidia/llama-3.1-nemotron-nano-8b-v1"  # M-C(SBv2): served NIM model id
@@ -110,6 +111,8 @@ def load_settings(env: Optional[Mapping[str, str]] = None) -> Settings:
         score_w_drop=float(e.get("SCORE_W_DROP", "50.0")),
         enable_proactive=e.get("ENABLE_PROACTIVE", "0") in ("1", "true", "True"),
         oracle_horizon_ticks=int(e.get("ORACLE_HORIZON_TICKS", "12")),
+        consequential_min_horizon_ticks=int(
+            e.get("CONSEQUENTIAL_MIN_HORIZON_TICKS", "60")),
         oracle_min_gap=float(e.get("ORACLE_MIN_GAP", "1.0")),
         nim_endpoint=e.get("NIM_ENDPOINT", ""),
         nim_model=e.get("NIM_MODEL", "nvidia/llama-3.1-nemotron-nano-8b-v1"),
