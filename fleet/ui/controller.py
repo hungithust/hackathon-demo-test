@@ -51,6 +51,31 @@ class SimulationController:
                  settings=self.settings, logger=_silent)
         return self
 
+    # ----- view model helpers -----
+    def _route_nodes(self, vehicle_id: str) -> List[str]:
+        """The vehicle's planned node sequence (DEPOT -> stops -> DEPOT) so the
+        control-room map can draw its route. Empty plan -> just the depot."""
+        vr = self.state.plan.get(vehicle_id)
+        if not vr or not vr.stops:
+            return ["DEPOT"]
+        stops = sorted(vr.stops, key=lambda st: st.sequence)
+        return ["DEPOT"] + [st.customer_id for st in stops] + ["DEPOT"]
+
+    def _vehicle_view(self, v) -> Dict:
+        route_nodes = self._route_nodes(v.id)
+        # next node on the route after the current stop index (clamped)
+        nxt = min(max(v.current_stop_index, 0) + 1, len(route_nodes) - 1)
+        cap = v.capacity_kg or 1.0
+        return {
+            "id": v.id, "status": v.status.value,
+            "lat": v.pos.lat, "lng": v.pos.lng,
+            "stop_index": v.current_stop_index,
+            "capacity_kg": v.capacity_kg,
+            "load_pct": round(100.0 * v.current_load_kg / cap),
+            "route_nodes": route_nodes,
+            "leg_to": route_nodes[nxt] if route_nodes else "DEPOT",
+        }
+
     # ----- view model -----
     def snapshot(self) -> Dict:
         s = self.state
@@ -62,15 +87,12 @@ class SimulationController:
             "clock": s.clock.isoformat(),
             "sim_tick": s.sim_tick,
             "pending_orders": s.total_orders_pending(),
-            "vehicles": [
-                {"id": v.id, "status": v.status.value,
-                 "lat": v.pos.lat, "lng": v.pos.lng,
-                 "stop_index": v.current_stop_index}
-                for v in s.vehicles.values()
-            ],
+            "vehicles": [self._vehicle_view(v) for v in s.vehicles.values()],
             "active_events": [
                 {"id": e.id, "event_type": e.event_type.value,
-                 "target": e.target, "severity": e.severity.value}
+                 "target": e.target, "severity": e.severity.value,
+                 "started_at": e.started_at.isoformat(),
+                 "description": e.description}
                 for e in s.get_active_events()
             ],
             "decisions": {
@@ -83,14 +105,35 @@ class SimulationController:
             "pending_decisions": [
                 {"id": d.id, "action": d.action.value, "event_id": d.event_id,
                  "description": d.description,
+                 "engine": d.engine.value,
+                 "timestamp": d.timestamp.isoformat(),
                  "added_delay_min": d.impact_estimate.get("added_delay_min", 0.0)}
                 for d in s.get_pending_decisions()
+            ],
+            # Human-resolved (approved/rejected) decisions, newest first — the
+            # "Resolved" tab of the approval queue.
+            "resolved": [
+                {"id": d.id, "action": d.action.value, "engine": d.engine.value,
+                 "status": d.approval_status.value,
+                 "added_delay_min": d.impact_estimate.get("added_delay_min", 0.0),
+                 "resolved_at": d.approved_at.isoformat() if d.approved_at else None}
+                for d in reversed(s.decisions)
+                if d.approved_by == "human"
+                and d.approval_status.value in ("approved", "rejected")
+            ],
+            # Decisions the gate auto-applied (small/low-impact) — the "Auto" tab.
+            "auto_handled": [
+                {"id": d.id, "action": d.action.value, "engine": d.engine.value,
+                 "description": d.description,
+                 "added_delay_min": d.impact_estimate.get("added_delay_min", 0.0)}
+                for d in reversed(s.decisions) if d.approved_by == "auto"
             ],
             "depot": {"lat": s.depot.location.lat, "lng": s.depot.location.lng,
                       "name": s.depot.location.name},
             "customers": [
                 {"id": c.id, "lat": c.location.lat, "lng": c.location.lng,
-                 "name": c.location.name, "priority": c.priority}
+                 "name": c.location.name, "priority": c.priority,
+                 "type": c.type, "orders": sum(c.orders.values())}
                 for c in s.customers.values()
             ],
             "routes": [
