@@ -11,3 +11,7 @@ ortools>=9.8
 # UI (M7): Streamlit dashboard. Needed only to run `streamlit run fleet/ui/app.py`;
 # the headless system and the test suite do not import it.
 streamlit>=1.30
+# --- intake layer (optional, lazy-imported; not needed for the test suite) ---
+# openai>=1.0          # OpenAI-compatible client for the NIM extractor transport
+# faster-whisper>=1.0  # self-hosted Vietnamese ASR (WhisperTranscriber)
+# nvidia-riva-client   # Riva ASR NIM transport (RivaTranscriber)
