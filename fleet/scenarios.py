@@ -3,11 +3,14 @@ Migrated from MOPHONG_Hackathon simple_simulator.create_sample_state with
 spec schema applied (priority 1-4, veh_type/wade_capability, flood_level)."""
 
 from datetime import datetime, timedelta
+from typing import Dict, List, Optional, Tuple
 
 from fleet.contracts.state import (
     WorldState, Depot, Location, Vehicle, VehicleStatus, CustomerProfile,
     TimeWindow, RoadGraph, RoadNode, RoadEdge, EdgeStatus,
 )
+from fleet.geo.router import route
+from fleet.geo.roster import HCM_CUSTOMERS
 
 
 def build_sample_state(base_time: datetime = datetime(2026, 6, 4, 6, 0)) -> WorldState:
@@ -90,3 +93,87 @@ def build_sample_state(base_time: datetime = datetime(2026, 6, 4, 6, 0)) -> Worl
         vehicles=vehicles,
         road_graph=RoadGraph(nodes=nodes, edges=edges, adjacency=adjacency),
     )
+
+
+def build_real_state(graph, customers: Optional[List[tuple]] = None,
+                     base_time: datetime = datetime(2026, 6, 4, 6, 0),
+                     urban_speed_kmh: float = 25.0,
+                     ) -> Tuple[WorldState, Dict[str, List[Tuple[float, float]]]]:
+    """Real-map world: same logical structure as build_sample_state, but edge
+    distance/time come from routing over `graph` (injected networkx graph) and a
+    side-car geometry map (edge_id -> polyline) is returned for the UI. The graph
+    is injected so this is testable offline and never forces an OSM load."""
+    customers = customers if customers is not None else HCM_CUSTOMERS
+
+    depot_loc = Location(10.8231, 106.6297, "1 Nguyen Hue, Q.1, HCM", "Kho Chinh HCM")
+    depot = Depot(
+        location=depot_loc,
+        inventory={"SKU001": 400, "SKU002": 200, "SKU003": 320},
+        opening_time=base_time,
+        closing_time=base_time + timedelta(hours=12),
+    )
+
+    vehicles = {}
+    for i in range(1, 4):
+        vid = f"V{i:03d}"
+        vehicles[vid] = Vehicle(
+            id=vid, capacity_kg=500, pos=depot_loc, current_load_kg=0,
+            status=VehicleStatus.AT_DEPOT,
+            shift_start=base_time, shift_end=base_time + timedelta(hours=10),
+            veh_type="truck", wade_capability=0.3,
+        )
+
+    cust_objs = {}
+    for cid, ctype, lat, lng, name, orders, prio, tw_s, tw_e, sla_h in customers:
+        cust_objs[cid] = CustomerProfile(
+            id=cid, type=ctype,
+            location=Location(lat, lng, name, name),
+            orders=orders,
+            time_window=TimeWindow(base_time + timedelta(hours=tw_s),
+                                   base_time + timedelta(hours=tw_e)),
+            priority=prio,
+            sla_deadline=base_time + timedelta(hours=sla_h),
+        )
+
+    nodes = {"DEPOT": RoadNode("DEPOT", depot_loc)}
+    for cid in cust_objs:
+        nodes[cid] = RoadNode(cid, cust_objs[cid].location)
+
+    edges: Dict[str, RoadEdge] = {}
+    adjacency: Dict[str, List[str]] = {n: [] for n in nodes}
+    geometry: Dict[str, List[Tuple[float, float]]] = {}
+    depot_latlng = (depot_loc.lat, depot_loc.lng)
+
+    def _add(a, b, km, mins, poly, **kw):
+        e = RoadEdge(a, b, km, mins, **kw)
+        edges[e.id] = e
+        adjacency[a].append(e.id)
+        geometry[e.id] = poly
+
+    # depot <-> every customer, routed both ways (reverse reuses the forward poly).
+    for cid, c in cust_objs.items():
+        r = route(graph, depot_latlng, (c.location.lat, c.location.lng),
+                  urban_speed_kmh=urban_speed_kmh)
+        _add("DEPOT", cid, r.distance_km, r.minutes, r.polyline)
+        _add(cid, "DEPOT", r.distance_km, r.minutes, list(reversed(r.polyline)))
+
+    # Flood-prone parallel DEPOT<->C001 route (spec §6.9): shorter but FLOODED, so
+    # standard trucks (wade 0.3 m) cannot use it while flooded — keeps M3's
+    # per-veh_type matrix logic exercised. Geometry reuses the primary route.
+    if "C001" in cust_objs:
+        base = edges["DEPOT->C001"]
+        poly = geometry["DEPOT->C001"]
+        _add("DEPOT", "C001", base.distance_km * 0.6, base.base_time_minutes * 0.6,
+             poly, id="DEPOT->C001#2", status=EdgeStatus.FLOODED, flood_level=0.5)
+        _add("C001", "DEPOT", base.distance_km * 0.6, base.base_time_minutes * 0.6,
+             list(reversed(poly)), id="C001->DEPOT#2",
+             status=EdgeStatus.FLOODED, flood_level=0.5)
+
+    state = WorldState(
+        clock=base_time,
+        depot=depot,
+        customers=cust_objs,
+        vehicles=vehicles,
+        road_graph=RoadGraph(nodes=nodes, edges=edges, adjacency=adjacency),
+    )
+    return state, geometry
