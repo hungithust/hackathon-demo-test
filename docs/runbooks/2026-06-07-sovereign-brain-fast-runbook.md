@@ -190,6 +190,42 @@ Nếu có NIM endpoint:
 python -m scripts.eval_brain --test data/sovereign-brain/test.jsonl --ticks 24 --nim-endpoint $env:NIM_ENDPOINT 2>&1 | Tee-Object -FilePath logs\eval-nim.log
 ```
 
+## 11b. Voice intake demo (tùy chọn, mặc định TẮT)
+
+Báo cáo sự cố bằng giọng nói/văn bản → tiêm `Event` vào world đang chạy. Chi tiết
+đầy đủ ở runbook kỹ thuật **Mục 16**.
+
+Lưu ý trước khi bật:
+
+- Mặc định TẮT: không set `ASR_ENGINE`/`NIM_ENDPOINT` thì panel chỉ dùng ô gõ text.
+- Suite test không import `streamlit/torch/whisper/openai/riva`; chỉ cần khi chạy live.
+- Extractor `nim` tái dùng đúng `NIM_ENDPOINT` ở mục 5.
+
+Smoke không cần model:
+
+```powershell
+pytest tests/test_intake_resolver.py tests/test_intake_extractor.py tests/test_intake_asr.py tests/test_intake_controller.py -q
+```
+
+Chạy live text-only (an toàn nhất):
+
+```powershell
+$env:DECISION_ENGINE="nim"
+$env:NIM_ENDPOINT="http://host:8000/v1"
+python -m streamlit run fleet/ui/app.py --server.port 8501
+```
+
+Có giọng nói (Whisper self-host):
+
+```powershell
+$env:ASR_ENGINE="whisper"
+$env:WHISPER_MODEL="large-v3"
+python -m streamlit run fleet/ui/app.py --server.port 8501
+```
+
+Panel "Báo cáo sự cố": gõ `kho C001 het hang` → **Bóc tách & xử lý** → thấy report
+được tiêm + thẻ quyết định. Không có transport thì panel báo lỗi rõ ràng (degrade OK).
+
 ## 12. Kiểm soát log
 
 - Loop log: `logs\loop-smoke.log`
