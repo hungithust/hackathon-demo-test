@@ -6,6 +6,15 @@ Glue only — all logic is in SimulationController. Run with:
 Streamlit is imported here and nowhere else, so the headless system and the test
 suite never depend on it."""
 
+import sys
+from pathlib import Path
+
+# Streamlit puts only this file's folder on sys.path, not the project root,
+# so `import fleet` fails. Add the repo root (…/hackathon) before importing it.
+_ROOT = Path(__file__).resolve().parents[2]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+
 import streamlit as st
 import pydeck as pdk
 
