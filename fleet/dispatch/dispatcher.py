@@ -83,9 +83,15 @@ class Dispatcher:
         cust = self._target_customer(state, decision)
         if cust is None:
             return {"status": "noop", "reason": "no target customer"}
+        before = {
+            "priority": cust.priority,
+            "service_time_min": float(getattr(cust, "service_time_min", 10.0)),
+        }
         cust.priority = int(PriorityLevel.P1)
         cust.time_window.start = state.clock
-        return {"status": "applied", "accelerated": cust.id}
+        cust.service_time_min = 0.0
+        return {"status": "applied", "accelerated": cust.id, "before": before,
+                "after": {"priority": cust.priority, "service_time_min": cust.service_time_min}}
 
     # ----- helpers -----
     def _target_customer(self, state: WorldState, decision: Decision):

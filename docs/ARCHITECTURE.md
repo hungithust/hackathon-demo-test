@@ -1,206 +1,680 @@
-# Kiến trúc hệ thống — AI Realtime Delivery-Fleet Optimizer
+# Kiến trúc hệ thống — Fleet Optimizer + Sovereign Brain v2
 
-> Tài liệu tổng quan cho người mới. Đọc file này trước, rồi sang [MODULES.md](MODULES.md) để hiểu chi tiết từng module.
-> Spec nguồn (source of truth): [specs/2026-06-04-fleet-optimizer-base-project-spec.md](superpowers/specs/2026-06-04-fleet-optimizer-base-project-spec.md). Bài toán: [PROBLEM_STATEMENT.md](PROBLEM_STATEMENT.md).
+> Tài liệu này mô tả **toàn bộ hệ thống ở mức kiến trúc và module** cho người đã biết một chút về tech.
+> Mục tiêu là hiểu hệ thống gồm những khối nào, chúng nối với nhau ra sao, cấu hình ở đâu, và đường chạy nào dùng cho demo / train / eval.
+> Tài liệu này **không** đi vào từng hàm hay từng dòng code; chỉ nhắc tới **class** và **script** ở những điểm quan trọng.
 
 ---
 
 ## 1. Hệ thống này làm gì?
 
-Tối ưu **đội xe giao hàng theo thời gian thực** cho mô hình **hub-and-spoke 1 kho (depot)**: kho giữ tồn, nhiều xe đi giao cho các khách (customer) theo **khung giờ (time window)** và **tải trọng (capacity)** — đây là bài toán **VRPTW** (Vehicle Routing Problem with Time Windows).
+Đây là một hệ thống tối ưu điều phối giao hàng thời gian thực cho mô hình:
 
-Điểm khác biệt: thế giới **sống và bị nhiễu loạn** (đường ngập/tắc, xe hỏng, nhu cầu tăng đột biến, thiếu hàng). Hệ thống **phát hiện** nhiễu loạn → **ra quyết định** (đổi tuyến, dời lịch, ưu tiên lại…) → **phê duyệt** (tự động hoặc người duyệt) → **thực thi** (thay đổi thế giới) → **giải lại tuyến**.
+- **1 kho trung tâm** (`Depot`)
+- **nhiều xe** (`Vehicle`)
+- **nhiều khách hàng** có đơn, khung giờ phục vụ và mức ưu tiên (`CustomerProfile`)
+- **mạng lưới đường** có thể bị tắc, ngập, chặn (`RoadGraph`, `RoadEdge`)
 
----
+Ở mức business, hệ thống làm 4 việc:
 
-## 2. Mô hình tư duy (mental model)
+1. mô phỏng thế giới giao hàng đang vận hành
+2. phát hiện biến động / disruption
+3. ra quyết định điều phối
+4. thực thi và đánh giá lại kết quả
 
-Toàn hệ thống xoay quanh **một đối tượng trạng thái duy nhất** — `WorldState` — và **một vòng lặp** (`run_loop`) đẩy trạng thái đó tiến lên từng "tick" thời gian.
+Ngoài runtime path, repo còn có một offline pipeline tên **Sovereign Brain v2** để:
 
-```
-                 ┌─────────────────── WorldState (nguồn sự thật duy nhất) ───────────────────┐
-                 │  clock, depot(inventory), vehicles, customers(orders), road_graph,         │
-                 │  plan(routes), events[], decisions[]                                       │
-                 └───────────────────────────────────────────────────────────────────────────┘
-                                              ▲   │ đọc/ghi
-                                              │   ▼
-   ┌──────────┐   tick   ┌───────────┐ detect ┌──────────┐ decide ┌───────────────┐ apply ┌────────────┐
-   │Simulator │ ───────▶ │  Detector │ ─────▶ │ (events) │ ─────▶ │ DecisionEngine│ ────▶ │ Dispatcher │
-   │(thế giới │          │(phát hiện │        │          │        │(rule / Claude)│       │(thực thi)  │
-   │  sống)   │          │ nhiễu)    │        └──────────┘        └───────────────┘       └────────────┘
-   └──────────┘          └───────────┘                                  │ approval gate         │
-        │ chuyển động xe                                                ▼                       ▼
-        │ + giao hàng                                          tự duyệt / chờ người      RouteOptimizer
-        └──────────────────────────────────────────────────────────────────────────▶  (CPU OR-Tools / cuOpt)
-                                                                    giải lại tuyến  ◀───────────┘
-```
+- sinh dataset từ mô phỏng
+- gán nhãn bằng oracle
+- fine-tune model nội bộ
+- serve model qua NIM
 
-Hai nguyên tắc kiến trúc xuyên suốt:
+Nói ngắn gọn:
 
-1. **Contract-first / walking skeleton.** Mọi module ẩn sau **6 interface** (`Protocol`). Code gọi (loop, UI) chỉ biết interface, không biết impl cụ thể. Đổi CPU↔GPU hay rule↔LLM là **đổi config**, không sửa caller.
-2. **Default chạy được mà không cần gì.** Impl mặc định không cần GPU, không cần API key. cuOpt và Claude cắm vào sau **cùng interface** khi có endpoint/key.
+- **runtime path** = hệ thống đang chạy để quyết định
+- **offline path** = hệ thống tạo dữ liệu và train model để thay thế decision engine bên thứ ba
 
 ---
 
-## 3. Sáu interface (xương sống)
+## 2. Hai đường chạy chính
 
-Định nghĩa tại [fleet/contracts/interfaces.py](../fleet/contracts/interfaces.py) — tất cả là `@runtime_checkable Protocol`.
+## 2.1 Runtime path
 
-| Interface | Phương thức | Impl mặc định | Impl thay thế | Chọn bằng |
-|---|---|---|---|---|
-| `Simulator` | `tick(state)`, `inject_event(...)` | `WorldSimulator` | — | luôn dùng |
-| `Detector` | `detect(state) -> List[Event]` | `RuleDetector` | `ZScoreDetector` | `DETECTOR_ENGINE` |
-| `RouteOptimizer` | `solve(problem) -> RoutingSolution` | `CpuSolver` (OR-Tools) | `CuOptAdapter` (NVIDIA cuOpt) | `ROUTING_ENGINE` (+`CUOPT_ENDPOINT`) |
-| `Forecaster` | `forecast(history, horizon_h) -> dict` | `EwmaForecaster` | *(prophet chưa có)* | `FORECASTER_ENGINE` |
-| `DecisionEngine` | `decide(state, events) -> List[Decision]` | `RuleBasedEngine` | `ClaudeAgent` (Anthropic SDK) | `DECISION_ENGINE` (+`ANTHROPIC_API_KEY`) |
-| `Dispatcher` | `apply(state, decision)` | `Dispatcher` | — | luôn dùng |
+Runtime path là đường dùng khi mô phỏng hoặc demo hệ thống end-to-end:
 
----
+`WorldSimulator` → `Detector` → `DecisionEngine` → `Approval` → `Dispatcher` → `RouteOptimizer`
 
-## 4. Composition root (lắp ráp)
+Mỗi tick thời gian:
 
-`build_components(settings)` tại [fleet/factory.py](../fleet/factory.py) là **nơi duy nhất** biết mọi impl. Nó đọc `Settings` và trả về một `Components` (gói 6 impl đã chọn). Quy tắc chọn:
+1. simulator cập nhật thế giới
+2. detector tìm sự kiện bất thường
+3. decision engine sinh quyết định
+4. approval gate quyết định tự duyệt hay chờ người duyệt
+5. dispatcher áp dụng thay đổi vào state
+6. nếu cần, route optimizer giải lại tuyến
 
-- **Routing**: `cuopt` **và** có `CUOPT_ENDPOINT` → `CuOptAdapter`; ngược lại → `CpuSolver`.
-- **Decision**: `claude` **và** có `ANTHROPIC_API_KEY` → `ClaudeAgent`; ngược lại → `RuleBasedEngine`.
-- **Detector**: `zscore` → `ZScoreDetector`; ngược lại → `RuleDetector`.
-- **Forecaster**: luôn `EwmaForecaster` (prophet chưa hiện thực).
+File trung tâm của runtime:
 
-Triết lý "fallback an toàn": chọn engine cao cấp **chỉ khi** đủ điều kiện (endpoint/key), nếu không tự lùi về default để hệ thống luôn chạy.
+- `fleet/loop.py`
+- `fleet/factory.py`
+- `fleet/contracts/state.py`
 
----
+## 2.2 Offline Sovereign Brain path
 
-## 5. Cấu hình (Settings)
+Offline path dùng để tạo dữ liệu và train:
 
-[config/settings.py](../config/settings.py) — `Settings` là dataclass **frozen**; `load_settings(env)` đọc biến môi trường (mặc định `os.environ`).
+1. dựng nhiều tình huống mô phỏng
+2. tạo disruption có hậu quả thật trong world
+3. oracle grade các action candidate bằng roll-forward
+4. giữ action tốt nhất làm ground truth
+5. xuất `train.jsonl`, `test.jsonl`, `prefs.jsonl`
+6. fine-tune LoRA / DPO
+7. eval offline + online
 
-| Field | ENV | Mặc định | Ý nghĩa |
-|---|---|---|---|
-| `routing_engine` | `ROUTING_ENGINE` | `cpu` | `cpu` \| `cuopt` |
-| `decision_engine` | `DECISION_ENGINE` | `rule` | `rule` \| `claude` |
-| `detector_engine` | `DETECTOR_ENGINE` | `rule` | `rule` \| `zscore` |
-| `forecaster_engine` | `FORECASTER_ENGINE` | `ewma` | `ewma` \| `prophet`(chưa có) |
-| `seed` | `SEED` | `42` | RNG simulator (xác định, tái lập) |
-| `tick_minutes` | `TICK_MINUTES` | `5` | số phút mỗi tick |
-| `anthropic_api_key` | `ANTHROPIC_API_KEY` | `""` | bật ClaudeAgent |
-| `cuopt_endpoint` | `CUOPT_ENDPOINT` | `""` | bật CuOptAdapter (`host:port`) |
-| `auto_approve_delay_threshold_min` | `AUTO_APPROVE_DELAY_THRESHOLD_MIN` | `15` | ngưỡng tự duyệt REROUTE/RESCHEDULE |
-| `sla_critical_threshold_min` | `SLA_CRITICAL_THRESHOLD_MIN` | `30` | ngưỡng SLA nguy cấp |
-| `demand_noise` | `DEMAND_NOISE` | `0.3` | nhiễu nhu cầu (±) |
-| `restock_interval_min` | `RESTOCK_INTERVAL_MIN` | `240` | chu kỳ nhập kho |
-| `solver_time_limit_sec` | `SOLVER_TIME_LIMIT_SEC` | `0` | >0 bật metaheuristic OR-Tools |
-| `ewma_alpha` | `EWMA_ALPHA` | `0.3` | hệ số làm trơn EWMA |
-| `zscore_threshold` | `ZSCORE_THRESHOLD` | `2.0` | ngưỡng z-score báo surge |
-| `traffic_alert_factor` | `TRAFFIC_ALERT_FACTOR` | `3.0` | `traffic_factor` ≥ ngưỡng → TRAFFIC |
+File trung tâm của offline path:
+
+- `fleet/agent/oracle.py`
+- `fleet/agent/dataset.py`
+- `scripts/gen_dataset.py`
+- `scripts/train_lora.py`
+- `scripts/train_dpo.py`
+- `scripts/eval_brain.py`
 
 ---
 
-## 6. Vòng lặp một tick (chi tiết)
+## 3. Mô hình lõi của hệ thống
 
-`run_loop(state, components, n_ticks, settings, logger)` tại [fleet/loop.py](../fleet/loop.py). **Đây là trái tim hệ thống — đọc kỹ.**
+Toàn hệ thống xoay quanh một state duy nhất: `WorldState`.
 
-**Trước vòng lặp:** nếu chưa có `plan` mà có đơn đang chờ → `plan_routes` (lập tuyến lần đầu).
+`WorldState` là nguồn sự thật chung cho:
 
-**Mỗi tick:**
-1. `simulator.tick(state)` — đẩy đồng hồ, sinh nhu cầu, nhập kho, cập nhật sự kiện thiếu hàng, **di chuyển + giao hàng** xe theo lịch.
-2. `_reconcile_detected(state, detector.detect(state))` — **cấp vòng đời cho sự kiện phát hiện**: điều kiện mới (vd cạnh ngập) được thêm **một lần** vào `state.events`; điều kiện `DET_*` đã biến mất thì đóng lại bằng `ended_at`. → một dòng ngập đứng yên là **một** sự kiện kéo dài, không phải sự kiện mới mỗi tick.
-3. **Khử trùng quyết định**: chỉ lấy các sự kiện đang active **chưa có** quyết định nào (`dedup theo event_id`). → chặn việc re-REROUTE mỗi tick (lỗi từng làm xe không bao giờ giao được).
-4. `decision_engine.decide(state, events)` — sinh `Decision` cho mỗi sự kiện.
-5. **Cổng phê duyệt** (`should_auto_approve`): đủ điều kiện → tự duyệt + `dispatcher.apply`; nếu action ∈ `RESOLVE_ACTIONS` thì đánh dấu cần giải lại. Không đủ → để `PENDING` chờ người duyệt.
-6. Sau khi xử lý mọi quyết định: nếu cần giải lại và còn đơn → `reroute(state, optimizer)` (**bảo toàn các điểm đã giao**).
+- simulator
+- detector
+- routing
+- decision engine
+- UI
+- eval
 
-> 🔑 Hai fix quan trọng nằm ở bước 2–3 (vòng đời sự kiện + khử trùng) và trong `reroute` (bảo toàn `actual_arrival`). Trước fix: cạnh ngập cố định → REROUTE mỗi tick → `plan_routes` reset `state.plan` → xe không bao giờ giao. Sau fix (probe 20 tick): 2 reroute, 4 lượt giao, 0 sự kiện "treo".
+Các thành phần không trao đổi trực tiếp với nhau bằng object riêng lẻ; chúng chủ yếu:
 
----
+- đọc `WorldState`
+- ghi ngược thay đổi vào `WorldState`
 
-## 7. Mô hình dữ liệu (WorldState)
+Class quan trọng trong `fleet/contracts/state.py`:
 
-Định nghĩa tại [fleet/contracts/state.py](../fleet/contracts/state.py). Một `WorldState` chứa:
+- `WorldState`: snapshot tổng
+- `Depot`: kho và tồn kho
+- `Vehicle`: xe, trạng thái, loại xe, khả năng lội nước
+- `CustomerProfile`: khách hàng, đơn hàng, time window, priority
+- `RoadGraph`, `RoadEdge`, `RoadNode`: đồ thị đường
+- `Event`: disruption / anomaly
+- `Decision`: quyết định điều phối
+- `VehicleRoute`, `Stop`: tuyến đã giải
 
-- `clock` (datetime), `sim_tick` (int)
-- `depot: Depot` — `inventory: {sku: qty}`, giờ mở/đóng, vị trí
-- `vehicles: {id: Vehicle}` — `status`, `pos`, `capacity_kg`, `veh_type`, `wade_capability`, `current_stop_index`
-- `customers: {id: CustomerProfile}` — `orders: {sku: qty}`, `time_window`, `priority` (1=gấp nhất … 4)
-- `road_graph: RoadGraph` — `nodes`, `edges: {edge_id: RoadEdge}` (hỗ trợ **cạnh song song** A→B), `adjacency`
-- `plan: {vehicle_id: VehicleRoute}` — mỗi route gồm `stops` (planned/actual arrival)
-- `events: List[Event]` — vòng đời qua `started_at`/`ended_at`
-- `decisions: List[Decision]` — audit trail (status, approved_by, executed_at, execution_result)
+Điểm quan trọng về mặt kiến trúc:
 
-Enum quan trọng: `VehicleStatus`, `EdgeStatus` (OPEN/CONGESTED/BLOCKED/FLOODED), `EventType`, `EventSeverity` (LOW→CRITICAL), `DecisionAction` (reroute/reschedule/reprioritize/reallocate/defer/cancel/accelerate), `ApprovalStatus`, `PriorityLevel`.
-
-Helper hay dùng: `get_active_events()`, `get_pending_decisions()`, `total_orders_pending()`, `get_vehicle/get_customer/get_route`. Serialize: `to_dict()`/`from_dict()` (self-describing JSON).
-
-`RoadEdge` có `effective_time` (= `base_time_minutes * traffic_factor`) và `is_passable(wade_capability)` (BLOCKED cấm mọi xe; FLOODED cấm nếu `flood_level > wade_capability`).
+- state model đủ giàu để dùng cho cả **simulation**, **routing**, **agent**, **UI**, và **dataset generation**
+- các enum như `EventType`, `DecisionAction`, `VehicleStatus`, `EdgeStatus` tạo ra “ngôn ngữ chung” cho toàn repo
 
 ---
 
-## 8. Bản đồ thư mục
+## 4. Composition root: nơi chọn engine thật
 
-```
-config/settings.py        # Settings + load_settings (config-driven)
-fleet/
-  contracts/              # KHÔNG import gì nội bộ — nền tảng
-    state.py              #   entities, enums, WorldState, serialize
-    dto.py               #   RoutingProblem / RoutingSolution / TaskSpec / FleetVehicleSpec
-    interfaces.py         #   6 Protocol
-  scenarios.py            # build_sample_state (thế giới mẫu HCM)
-  factory.py              # build_components — composition root
-  loop.py                 # run_loop — vòng lặp headless + `python -m fleet.loop`
-  simulator/engine.py     # WorldSimulator (thế giới sống + chuyển động xe)
-  detection/
-    rules.py              #   RuleDetector (ngưỡng đường/xe)
-    zscore.py             #   ZScoreDetector (surge nhu cầu)
-  routing/
-    matrix.py             #   Dijkstra → ma trận thời gian + build_routing_problem
-    cpu_solver.py         #   CpuSolver (Google OR-Tools VRPTW)
-    cuopt_adapter.py      #   CuOptAdapter (NVIDIA cuOpt qua transport tiêm vào)
-    planner.py            #   plan_routes / reroute (ghi vào state.plan)
-  forecast/ewma.py        # EwmaForecaster (single exponential smoothing)
-  agent/
-    rule_based.py         #   RuleBasedEngine (map event→action)
-    claude_agent.py       #   ClaudeAgent (LLM, structured output, có fallback)
-  dispatch/
-    approval.py           #   should_auto_approve (chính sách cổng duyệt)
-    dispatcher.py         #   Dispatcher.apply (thực thi action thật)
-  ui/
-    controller.py         #   SimulationController (step/snapshot/approve/reject)
-    app.py                #   Streamlit dashboard
-tests/                    # pytest (đối tượng test là interface, không phải impl)
-docs/                     # tài liệu + specs + plans
-```
+File `fleet/factory.py` là **composition root**.
+
+Đây là nơi duy nhất chọn implementation thật cho từng interface, dựa trên `Settings`.
+
+Class chính:
+
+- `Components`
+- `build_components(settings)`
+
+Những gì `build_components` quyết định:
+
+- chọn optimizer: `CpuSolver` hay `CuOptAdapter`
+- chọn decision engine: `RuleBasedEngine`, `ScoringEngine`, `ClaudeAgent`, hay `NimAgent`
+- chọn detector: `RuleDetector`, `ZScoreDetector`, `ForecastResidualDetector`, `CusumDetector`, `CompositeDetector`
+- chọn forecaster: `EwmaForecaster` hay `HoltWintersForecaster`
+- luôn dựng `WorldSimulator` và `Dispatcher`
+
+Ý nghĩa:
+
+- caller như `fleet/loop.py` hay `fleet/ui/controller.py` không cần biết engine cụ thể
+- đổi CPU ↔ GPU, rule ↔ LLM, local ↔ hosted chỉ là **đổi config**
 
 ---
 
-## 9. Cách chạy
+## 5. Runtime pipeline chi tiết
 
-```powershell
-# kích hoạt venv (Windows PowerShell)
-.\.venv\Scripts\Activate.ps1
+## 5.1 Simulator
 
-# 1) chạy toàn bộ test
-pytest -q
+Module: `fleet/simulator/engine.py`
 
-# 2) chạy mô phỏng headless (in log mỗi tick)
-python -m fleet.loop
+Class chính:
 
-# 3) chạy UI (cần: pip install streamlit)
-streamlit run fleet/ui/app.py
-```
+- `WorldSimulator`
 
-Đổi engine bằng biến môi trường, ví dụ:
-```powershell
-$env:DETECTOR_ENGINE="zscore"; python -m fleet.loop
-$env:DECISION_ENGINE="claude"; $env:ANTHROPIC_API_KEY="sk-..."; python -m fleet.loop
-```
+Vai trò:
+
+- đẩy đồng hồ mô phỏng theo tick
+- sinh thêm nhu cầu
+- restock kho
+- tạo / đóng shortage events
+- cập nhật weather / traffic nếu bật
+- di chuyển xe và giao hàng
+
+Hiện simulator có hai mode logic quan trọng:
+
+- **schedule-driven path**: hành vi mặc định
+- **travel-time-aware path**: dùng khi grading consequential disruptions trong oracle
+
+Các ý quan trọng:
+
+- `advance_only` là cờ nội bộ dùng cho grading path để **freeze** các yếu tố ngoại sinh
+- `enable_travel_time` cho phép movement phản ứng với live road graph thay vì chỉ bám lịch cứng
+
+## 5.2 Detector
+
+Modules:
+
+- `fleet/detection/rules.py`
+- `fleet/detection/zscore.py`
+- `fleet/detection/forecast_residual.py`
+- `fleet/detection/cusum.py`
+- `fleet/detection/composite.py`
+
+Các class chính:
+
+- `RuleDetector`
+- `ZScoreDetector`
+- `ForecastResidualDetector`
+- `CusumDetector`
+- `CompositeDetector`
+
+Vai trò:
+
+- chuyển trạng thái của thế giới thành `Event`
+- tách phần “thế giới đang có gì bất thường” khỏi phần “nên làm gì tiếp theo”
+
+Thiết kế hiện tại có hai tầng:
+
+- tầng rule-based đơn giản, dễ giải thích
+- tầng statistical / layered để phát hiện tinh hơn
+
+## 5.3 Decision engine
+
+Modules:
+
+- `fleet/agent/rule_based.py`
+- `fleet/agent/scoring_engine.py`
+- `fleet/agent/claude_agent.py`
+- `fleet/agent/nim_agent.py`
+
+Các class chính:
+
+- `RuleBasedEngine`
+- `ScoringEngine`
+- `ClaudeAgent`
+- `NimAgent`
+
+Vai trò:
+
+- nhận `state + events`
+- trả về `List[Decision]`
+
+Ý nghĩa từng engine:
+
+- `RuleBasedEngine`: baseline đơn giản, deterministic
+- `ScoringEngine`: policy heuristic có chấm điểm cost
+- `ClaudeAgent`: dùng LLM ngoài
+- `NimAgent`: dùng model self-hosted qua OpenAI-compatible endpoint
+
+Với `NimAgent` và `ClaudeAgent`, code tách rõ:
+
+- **prompt/build_messages**
+- **structured output parsing**
+- **transport gọi model**
+
+Thiết kế này giúp test offline và thay transport dễ.
+
+## 5.4 Approval + Dispatcher
+
+Modules:
+
+- `fleet/dispatch/approval.py`
+- `fleet/dispatch/dispatcher.py`
+
+Class chính:
+
+- `Dispatcher`
+
+Vai trò:
+
+- quyết định nào được auto-approve
+- quyết định nào phải đợi người duyệt
+- khi đã duyệt thì áp dụng thay đổi thật vào world
+
+Các action mà dispatcher phải xử lý:
+
+- `reroute`
+- `reschedule`
+- `reprioritize`
+- `reallocate`
+- `defer`
+- `cancel`
+- `accelerate`
+
+Điểm quan trọng:
+
+- không phải action nào cũng tự giải lại tuyến
+- `RESOLVE_ACTIONS` xác định action nào phải reroute sau khi apply
+
+## 5.5 Route optimizer
+
+Modules:
+
+- `fleet/routing/matrix.py`
+- `fleet/routing/cpu_solver.py`
+- `fleet/routing/cuopt_adapter.py`
+- `fleet/routing/planner.py`
+
+Class / function chính:
+
+- `CpuSolver`
+- `CuOptAdapter`
+- `plan_routes`
+- `reroute`
+
+Vai trò:
+
+- chuyển `WorldState` thành bài toán routing
+- giải VRPTW
+- ghi solution trở lại `state.plan`
+
+Hai mode chính:
+
+- `CpuSolver`: local, deterministic, mặc định
+- `CuOptAdapter`: GPU/self-hosted, dùng khi có endpoint
+
+Ý nghĩa kiến trúc:
+
+- solver thực nằm sau DTO và adapter
+- loop không cần biết đang dùng OR-Tools hay cuOpt
 
 ---
 
-## 10. Giới hạn đã biết (trung thực)
+## 6. Offline Sovereign Brain v2 pipeline
 
-- **Đường Claude / cuOpt chưa chạy live trong test** — chỉ test bằng transport giả (canned). Hình dạng request thật (`output_config.format` của Claude, JSON của cuOpt) đúng theo tài liệu nhưng chưa đối chiếu endpoint thật. Cần 1 smoke call nếu muốn demo live.
-- **Prophet** (forecaster cao cấp) **chưa hiện thực** — `FORECASTER_ENGINE=prophet` vẫn ra EWMA.
-- **Chuyển động xe theo lịch**, không nội suy vị trí dọc cạnh (đủ cho demo/quyết định; mượt hơn để dành cho UI map sau).
-- **Một depot.** Đa kho là hướng mở rộng ngoài series.
-- Sự kiện phát hiện dùng id tất định `DET_*` và được cấp vòng đời trong loop (không phải trong detector) — detector vẫn thuần/đọc-only.
+## 6.1 Oracle
 
-Chi tiết từng module: xem [MODULES.md](MODULES.md).
+Module: `fleet/agent/oracle.py`
+
+Các thành phần chính:
+
+- `realized_cost`
+- `roll_forward`
+- `grade_action`
+- `best_action`
+
+Vai trò:
+
+- clone world
+- áp action thử
+- roll simulator tiến lên
+- đo cost thực tế sau một horizon
+
+Ý nghĩa:
+
+- thay vì “đoán” action nào tốt bằng rule cứng
+- hệ thống dùng chính simulator làm **oracle**
+
+Cost hiện dùng cùng đơn vị với decision scoring:
+
+- delay
+- dropped demand
+- SLA breach
+
+## 6.2 Dataset factory
+
+Module: `fleet/agent/dataset.py`
+
+Các thành phần chính:
+
+- `make_example` / `iter_examples`: baseline path cũ
+- `make_disrupted_example` / `iter_disrupted_examples`: consequential path chuẩn
+- `grade_full`
+- `grade_disrupted`
+- `build_record`
+- `build_preference_record`
+
+Vai trò:
+
+- dựng tình huống train
+- tạo event / injury
+- grade tất cả candidate actions
+- giữ action tốt nhất
+- xuất JSONL cho SFT / DPO
+
+Điểm kiến trúc quan trọng hiện nay:
+
+- **consequential path** là path chuẩn cho training
+- baseline path vẫn giữ lại để đối chiếu, không phải path train chính thức
+
+## 6.3 Training scripts
+
+Modules:
+
+- `scripts/train_lora.py`
+- `scripts/train_dpo.py`
+
+Vai trò:
+
+- `train_lora.py`: SFT trên `train.jsonl`
+- `train_dpo.py`: preference tuning trên `prefs.jsonl`
+
+Đặc điểm:
+
+- heavy GPU import nằm trong `main()`
+- formatter functions giữ độc lập để test dễ
+- output của model bám đúng structured decision schema
+
+## 6.4 Eval scripts
+
+Module: `scripts/eval_brain.py`
+
+Vai trò:
+
+- offline eval: prediction vs oracle ground truth
+- online eval: engine chạy qua full simulator loop
+
+Các engine thường đem so:
+
+- rule
+- scoring
+- nim
+
+Ý nghĩa:
+
+- tách “học được action đúng theo dataset chưa”
+- khỏi “chạy trong thế giới mô phỏng có tốt không”
+
+---
+
+## 7. UI và lớp điều khiển
+
+Modules:
+
+- `fleet/ui/controller.py`
+- `fleet/ui/app.py`
+
+Class chính:
+
+- `SimulationController`
+
+Vai trò:
+
+- đóng vai trò bridge giữa UI và runtime loop
+- cung cấp `step`, `snapshot`, `approve`, `reject`
+
+`app.py` là lớp Streamlit mỏng:
+
+- render state
+- hiển thị event / pending decisions
+- cho người dùng duyệt hoặc từ chối quyết định
+
+Ý nghĩa:
+
+- logic vận hành nằm ở controller và loop
+- UI chỉ là lớp hiển thị / tương tác
+
+---
+
+## 8. Các chế độ decision hiện có
+
+Ở mức vận hành, decision layer hiện có 4 mode thực dụng:
+
+- `rule`: đơn giản, ổn định, dễ demo
+- `scoring`: heuristic tốt hơn rule
+- `claude`: phụ thuộc API ngoài
+- `nim`: self-hosted, dùng cho hướng sovereign brain
+
+Trong thực tế:
+
+- nếu cần demo chắc chắn, `rule` hoặc `scoring` an toàn nhất
+- nếu cần story “self-hosted AI”, `nim` là mode quan trọng
+- nếu cần teacher / labeler / đối chiếu, `claude` vẫn hữu ích ở offline path
+
+---
+
+## 9. Cấu hình hệ thống
+
+Toàn bộ cấu hình tập trung ở `config/settings.py`.
+
+Class chính:
+
+- `Settings`
+- `load_settings(env)`
+
+Có thể chia config thành 8 nhóm:
+
+## 9.1 Engine selection
+
+- `ROUTING_ENGINE`
+- `DECISION_ENGINE`
+- `DETECTOR_ENGINE`
+- `FORECASTER_ENGINE`
+
+## 9.2 Core simulation
+
+- `SEED`
+- `TICK_MINUTES`
+- `RESTOCK_INTERVAL_MIN`
+- `DEMAND_NOISE`
+
+## 9.3 Demand process
+
+- `DEMAND_TREND_PER_DAY`
+- `DEMAND_WEEKEND_FACTOR`
+- `DEMAND_AR_RHO`
+- `DEMAND_AR_SIGMA`
+- `REGIME_PROB`
+- `REGIME_FACTOR`
+- `REGIME_DURATION_MIN`
+
+## 9.4 Weather / road effects
+
+- `ENABLE_WEATHER`
+- `ENABLE_TRAVEL_TIME`
+- `TRAFFIC_PEAK_FACTOR`
+- `WEATHER_RHO`
+- `WEATHER_FLOOD_THRESHOLD`
+- `WEATHER_FLOOD_LEVEL`
+
+## 9.5 Forecast / statistical detection
+
+- `EWMA_ALPHA`
+- `HW_ALPHA`
+- `HW_BETA`
+- `HW_GAMMA`
+- `SEASON_LENGTH`
+- `PI_Z`
+- `CUSUM_K`
+- `CUSUM_THRESHOLD`
+- `DETECTOR_MIN_HISTORY`
+- `ZSCORE_THRESHOLD`
+
+## 9.6 Decision / approval
+
+- `AUTO_APPROVE_DELAY_THRESHOLD_MIN`
+- `SLA_CRITICAL_THRESHOLD_MIN`
+- `SCORE_W_SLA`
+- `SCORE_W_DELAY`
+- `SCORE_W_DROP`
+- `ENABLE_PROACTIVE`
+
+## 9.7 Oracle / dataset
+
+- `ORACLE_HORIZON_TICKS`
+- `ORACLE_MIN_GAP`
+
+## 9.8 External endpoints
+
+- `ANTHROPIC_API_KEY`
+- `CUOPT_ENDPOINT`
+- `NIM_ENDPOINT`
+- `NIM_MODEL`
+
+Ý nghĩa kiến trúc:
+
+- hệ thống được thiết kế để **đổi behavior chủ yếu qua config**
+- không phải sửa caller để đổi engine
+
+---
+
+## 10. Cấu trúc thư mục nên hiểu như thế nào
+
+## 10.1 `fleet/contracts/`
+
+Lớp đáy:
+
+- schema
+- enums
+- DTO
+- interfaces
+
+Đây là nền tảng mà mọi module khác dùng.
+
+## 10.2 `fleet/simulator/`
+
+Mô hình thế giới sống.
+
+## 10.3 `fleet/detection/`
+
+Phát hiện disruption và anomaly.
+
+## 10.4 `fleet/routing/`
+
+Chuyển state thành routing problem và giải route.
+
+## 10.5 `fleet/forecast/`
+
+Dự báo cho detector hoặc các policy về sau.
+
+## 10.6 `fleet/agent/`
+
+Các decision engines và offline oracle/dataset logic.
+
+## 10.7 `fleet/dispatch/`
+
+Approval policy + world mutation theo action.
+
+## 10.8 `fleet/ui/`
+
+Lớp điều khiển và Streamlit app.
+
+## 10.9 `scripts/`
+
+Entry points cho dataset / train / eval.
+
+## 10.10 `tests/`
+
+Regression protection cho cả runtime và offline path.
+
+---
+
+## 11. Những điểm “đáng biết” về kiến trúc hiện tại
+
+## 11.1 Hệ thống thiên về deterministic-by-default
+
+Phần runtime mặc định vẫn ưu tiên:
+
+- CPU path
+- rule/scoring path
+- test offline được
+
+Điều này giúp demo ít rủi ro hơn.
+
+## 11.2 External AI/GPU là optional, không phải hard dependency
+
+- cuOpt chỉ dùng khi endpoint có sẵn
+- Claude chỉ dùng khi có key
+- NIM chỉ dùng khi có endpoint
+
+Nếu không có, hệ thống vẫn chạy.
+
+## 11.3 Offline training path được tách khỏi runtime path
+
+Điều này quan trọng vì:
+
+- train có thể thay đổi, thử nghiệm nhiều
+- runtime phải ổn định hơn
+
+Chỉ một phần nhỏ của sovereign brain thực sự vào runtime:
+
+- `NimAgent`
+- config chọn engine
+
+## 11.4 Oracle quality phụ thuộc dataset path, không chỉ model path
+
+Điểm mấu chốt của repo hiện tại là:
+
+- quality của fine-tune phụ thuộc mạnh vào `scripts.gen_dataset --consequential`
+- nếu sinh dataset sai path, train script vẫn chạy nhưng signal học sẽ kém
+
+---
+
+## 12. Hệ thống phù hợp để demo như thế nào?
+
+Repo hiện tại phù hợp cho 3 kiểu demo:
+
+## 12.1 Demo vận hành runtime
+
+Cho thấy:
+
+- thế giới có disruption
+- engine đưa ra quyết định
+- approval gate hoạt động
+- dispatcher áp dụng quyết định
+- route được giải lại
+
+## 12.2 Demo kiến trúc mở rộng
+
+Cho thấy:
+
+- cùng một loop
+- nhưng đổi engine qua config
+- CPU ↔ cuOpt
+- rule/scoring ↔ LLM ↔ NIM
+
+## 12.3 Demo sovereign brain
+
+Cho thấy:
+
+- dataset sinh từ mô phỏng
+- oracle chọn action tốt nhất
+- train LoRA / DPO
+- serve model nội bộ
+
+---
+
+## 13. Giới hạn hiện tại cần nói thẳng
+
+- đây vẫn là mô phỏng, không phải hệ thống production tích hợp ERP/WMS/TMS thật
+- runtime path và training path đã usable, nhưng policy semantics vẫn có thể tinh chỉnh thêm
+- một số engine cao cấp phụ thuộc endpoint ngoài repo
+- dataset quality phải được kiểm bằng gate, không suy ra chỉ từ việc command chạy xong
+
+---
+
+## 14. Nên đọc tiếp gì?
+
+- Nếu cần xem trách nhiệm từng module sâu hơn: `docs/MODULES.md`
+- Nếu cần quy trình chạy thật: `docs/runbooks/2026-06-07-sovereign-brain-fast-runbook.md`
+- Nếu cần quy trình kỹ thuật đầy đủ: `docs/runbooks/2026-06-07-sovereign-brain-technical-runbook.md`
+- Nếu cần dấu vết vá oracle M-F: `docs/superpowers/notes/2026-06-07-m-f-implementation-trace.md`
+
+---
+
+## 15. Một câu tóm tắt
+
+Đây là một nền tảng mô phỏng + tối ưu + ra quyết định cho delivery fleet, được thiết kế theo kiểu config-driven và module hóa, đồng thời có một offline AI pipeline đủ hoàn chỉnh để sinh dữ liệu, train model và đưa model self-hosted quay trở lại runtime qua NIM.

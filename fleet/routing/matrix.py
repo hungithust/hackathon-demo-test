@@ -11,7 +11,7 @@ from typing import Dict, List
 from fleet.contracts.state import RoadGraph, WorldState, VehicleStatus
 from fleet.contracts.dto import RoutingProblem, FleetVehicleSpec, TaskSpec
 
-DEFAULT_SERVICE_TIME_MIN = 10.0   # per-stop service time (no per-customer field yet)
+DEFAULT_SERVICE_TIME_MIN = 10.0
 
 INF = float("inf")
 
@@ -96,7 +96,7 @@ def build_routing_problem(state: WorldState,
             customer_id=cid,
             demand_kg=float(sum(c.orders.values())),
             tw_start=c.time_window.start, tw_end=c.time_window.end,
-            service_time_min=DEFAULT_SERVICE_TIME_MIN,
+            service_time_min=float(getattr(c, "service_time_min", DEFAULT_SERVICE_TIME_MIN)),
             priority=c.priority,
         ))
 

@@ -70,3 +70,10 @@ def test_roadedge_id_auto_derives_from_endpoints():
 def test_roadedge_explicit_id_is_preserved():
     e = RoadEdge("DEPOT", "C001", 1.2, 6.0, id="DEPOT->C001#2")
     assert e.id == "DEPOT->C001#2"
+
+
+def test_decision_engine_has_local_nim():
+    from fleet.contracts.state import DecisionEngine
+    assert DecisionEngine.LOCAL_NIM.value == "local_nim"
+    # serialization registry already covers DecisionEngine -> round-trips
+    assert DecisionEngine("local_nim") is DecisionEngine.LOCAL_NIM

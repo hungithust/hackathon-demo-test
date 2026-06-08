@@ -5,6 +5,7 @@ Vehicle MOVEMENT is intentionally NOT here: realistic movement needs shortest-pa
 demand grows, depot stock is restocked, shortages surface — so the detector and
 agent have something real to react to. Fully deterministic given settings.seed."""
 
+import math
 import random
 from datetime import timedelta
 from typing import Dict
@@ -13,6 +14,7 @@ from fleet.contracts.state import (
     WorldState, Event, EventType, EventSeverity, VehicleStatus, Vehicle,
     EdgeStatus,
 )
+from fleet.routing.matrix import shortest_times_from, DEFAULT_SERVICE_TIME_MIN
 
 
 def _seasonal_factor(hour: int) -> float:
@@ -24,6 +26,27 @@ def _seasonal_factor(hour: int) -> float:
     if 10 <= hour < 16:
         return 1.0
     return 0.4
+
+
+def _weekly_factor(weekday: int, weekend_factor: float) -> float:
+    """Weekly seasonality: weekends (Sat=5, Sun=6) scaled by weekend_factor."""
+    return weekend_factor if weekday >= 5 else 1.0
+
+
+def _trend_factor(days_elapsed: float, trend_per_day: float) -> float:
+    """Slow multiplicative trend over elapsed sim-days, floored at 0."""
+    return max(0.0, 1.0 + trend_per_day * days_elapsed)
+
+
+def _traffic_factor_for_hour(hour: int, peak_factor: float) -> float:
+    """Rush-hour congestion multiplier. Peaks (peak_factor) in the morning/evening
+    commute, mild at midday, free-flow (1.0) overnight. Caller keeps peak_factor
+    below settings.traffic_alert_factor so normal rush hour is not a TRAFFIC alert."""
+    if 6 <= hour < 10 or 16 <= hour < 20:
+        return peak_factor
+    if 10 <= hour < 16:
+        return 1.0 + 0.4 * (peak_factor - 1.0)   # ~midday, between free-flow and peak
+    return 1.0
 
 
 _BASE_RATE_PER_HOUR = {
@@ -46,19 +69,34 @@ def _pending_demand_by_sku(state: WorldState) -> Dict[str, int]:
 class WorldSimulator:
     def __init__(self, settings):
         self.settings = settings
+        self.advance_only = False         # M-F: grading-only mode; tick advances time and movement, but freezes exogenous world updates
         self.rng = random.Random(settings.seed)
         self._evt_seq = 0
         self._mins_since_restock = 0
         self._restock_batch = None      # lazily snapshotted on first tick
+        self._ar_state: Dict[str, float] = {}   # M-A: per-customer AR(1) state
+        self._regime_until: Dict[str, "datetime"] = {}  # M-A: regime end clock
+        self._start_clock = None          # M-A: captured on first tick for trend
+        self._weather_rng = random.Random(settings.seed + 1)  # M-A2: independent of demand rng
+        self._rain = 0.0                                      # M-A2: rain level in [0,1]
+        self._flood_prone = None                              # M-A2: lazily-snapshotted edge ids
+        self._weather_flooded: set = set()                    # M-A2: edges flooded BY weather
 
     def tick(self, state: WorldState) -> None:
         state.clock += timedelta(minutes=self.settings.tick_minutes)
         state.sim_tick += 1
         if self._restock_batch is None:
             self._restock_batch = dict(state.depot.inventory)
-        self._generate_demand(state)
-        self._maybe_restock(state)
-        self._update_shortage_events(state)
+        if self._start_clock is None:
+            self._start_clock = state.clock
+        if not self.advance_only:
+            if self.settings.enable_weather:
+                self._step_rain()
+                self._update_traffic(state)
+                self._update_weather(state)
+            self._generate_demand(state)
+            self._maybe_restock(state)
+            self._update_shortage_events(state)
         self._advance_vehicles(state)
 
     def inject_event(self, state: WorldState, event_type: EventType,
@@ -107,17 +145,89 @@ class WorldSimulator:
         base = int(expected)
         return base + (1 if self.rng.random() < (expected - base) else 0)
 
+    def _ar_multiplier(self, cid: str) -> float:
+        """AR(1) autocorrelated, mean~1, strictly-positive demand multiplier.
+
+        a_t = rho*a_{t-1} + sqrt(1-rho^2)*eps;  multiplier = exp(sigma*a_t - sigma^2/2).
+        The lognormal mean-correction keeps the long-run mean ~= 1.0."""
+        rho = self.settings.demand_ar_rho
+        sigma = self.settings.demand_ar_sigma
+        prev = self._ar_state.get(cid, 0.0)
+        eps = self.rng.gauss(0.0, 1.0)
+        a = rho * prev + math.sqrt(max(0.0, 1.0 - rho * rho)) * eps
+        self._ar_state[cid] = a
+        return math.exp(sigma * a - 0.5 * sigma * sigma)
+
+    def _regime_multiplier(self, cid: str, clock) -> float:
+        """Occasional promotion regime: with prob `regime_prob` per call a customer
+        enters a `regime_factor` demand regime lasting `regime_duration_min`."""
+        until = self._regime_until.get(cid)
+        if until is not None and clock < until:
+            return self.settings.regime_factor
+        # not currently in a regime: maybe start one
+        if self.rng.random() < self.settings.regime_prob:
+            self._regime_until[cid] = clock + timedelta(
+                minutes=self.settings.regime_duration_min)
+            return self.settings.regime_factor
+        return 1.0
+
+    def _step_rain(self) -> float:
+        """AR(1) rain process in [0,1]: rho keeps rain spells persistent.
+        Uses the independent weather rng so the demand stream is untouched."""
+        rho = self.settings.weather_rho
+        shock = self._weather_rng.random()
+        self._rain = max(0.0, min(1.0, rho * self._rain + (1.0 - rho) * shock))
+        return self._rain
+
+    def _update_traffic(self, state: WorldState) -> None:
+        """Set rush-hour congestion on OPEN edges only; injected/disrupted edges
+        (BLOCKED/FLOODED/CONGESTED) keep their values (§3.2 injection override)."""
+        factor = _traffic_factor_for_hour(
+            state.clock.hour, self.settings.traffic_peak_factor)
+        for edge in state.road_graph.edges.values():
+            if edge.status == EdgeStatus.OPEN:
+                edge.traffic_factor = factor
+
+    def _update_weather(self, state: WorldState) -> None:
+        """Flood-prone edges (those starting flooded / with a baseline flood_level)
+        flood when rain >= threshold and recover when it drops. Only edges weather
+        itself owns are toggled, so presenter-injected floods elsewhere are safe."""
+        if self._flood_prone is None:
+            self._flood_prone = {
+                eid for eid, e in state.road_graph.edges.items()
+                if e.flood_level > 0.0 or e.status == EdgeStatus.FLOODED
+            }
+        flooding = self._rain >= self.settings.weather_flood_threshold
+        for eid in self._flood_prone:
+            edge = state.road_graph.get_edge(eid)
+            if edge is None:
+                continue
+            if flooding:
+                edge.status = EdgeStatus.FLOODED
+                edge.flood_level = self.settings.weather_flood_level
+                self._weather_flooded.add(eid)
+            elif eid in self._weather_flooded:
+                edge.status = EdgeStatus.OPEN
+                edge.flood_level = 0.0
+                self._weather_flooded.discard(eid)
+
     def _generate_demand(self, state: WorldState) -> None:
         if not state.depot.inventory:
             return
         skus = sorted(state.depot.inventory.keys())
         hours_per_tick = self.settings.tick_minutes / 60.0
-        factor = _seasonal_factor(state.clock.hour)
-        noise = self.settings.demand_noise
+        intraday = _seasonal_factor(state.clock.hour)
+        weekly = _weekly_factor(state.clock.weekday(),
+                                self.settings.demand_weekend_factor)
+        days_elapsed = (
+            (state.clock - self._start_clock).total_seconds() / 86400.0
+            if self._start_clock is not None else 0.0)
+        trend = _trend_factor(days_elapsed, self.settings.demand_trend_per_day)
         for c in state.customers.values():
             base = _BASE_RATE_PER_HOUR.get(c.type, _DEFAULT_BASE_RATE)
-            expected = base * hours_per_tick * factor
-            expected *= self.rng.uniform(1.0 - noise, 1.0 + noise)
+            expected = base * hours_per_tick * intraday * weekly * trend
+            expected *= self._regime_multiplier(c.id, state.clock)
+            expected *= self._ar_multiplier(c.id)
             units = self._sample_units(expected)
             if units <= 0:
                 continue
@@ -155,6 +265,9 @@ class WorldSimulator:
     def _advance_vehicles(self, state: WorldState) -> None:
         """Schedule-driven movement: visit every stop whose planned arrival has
         passed, delivering on arrival; return to depot once the shift is over."""
+        if getattr(self.settings, "enable_travel_time", False):
+            self._advance_vehicles_live(state)
+            return
         for vid, route in state.plan.items():
             vehicle = state.vehicles.get(vid)
             if vehicle is None or vehicle.status in (
@@ -170,6 +283,58 @@ class WorldSimulator:
                     vehicle.current_stop_index = stop.sequence
                     vehicle.status = VehicleStatus.ON_ROUTE
                     self._deliver(state, vehicle, stop.customer_id)
+            all_visited = route.stops and all(
+                s.actual_arrival is not None for s in route.stops)
+            shift_done = route.end_time is None or state.clock >= route.end_time
+            if all_visited and shift_done:
+                vehicle.status = VehicleStatus.AT_DEPOT
+                vehicle.pos = state.depot.location
+                vehicle.current_stop_index = -1
+
+    def _advance_vehicles_live(self, state: WorldState) -> None:
+        """Replay route progress against the current road graph so disruptions
+        change realized travel times. No extra simulator state is stored: the
+        current node/time are reconstructed from the already-visited stops."""
+        for vid, route in state.plan.items():
+            vehicle = state.vehicles.get(vid)
+            if vehicle is None or vehicle.status in (
+                    VehicleStatus.BROKEN, VehicleStatus.MAINTENANCE):
+                continue
+
+            visited = [s for s in route.stops if s.actual_arrival is not None]
+            visited.sort(key=lambda s: s.sequence)
+            if visited:
+                last = visited[-1]
+                cur_node = last.customer_id
+                cur_time = last.actual_departure or (
+                    last.actual_arrival + timedelta(minutes=DEFAULT_SERVICE_TIME_MIN))
+            else:
+                cur_node = "DEPOT"
+                cur_time = state.depot.opening_time
+
+            for stop in sorted(route.stops, key=lambda s: s.sequence):
+                if stop.actual_arrival is not None:
+                    continue
+                dist = shortest_times_from(
+                    state.road_graph, cur_node, vehicle.wade_capability)
+                if stop.customer_id not in dist:
+                    break
+                arrival = cur_time + timedelta(minutes=dist[stop.customer_id])
+                if arrival > state.clock:
+                    break
+                stop.actual_arrival = arrival
+                cust = state.customers.get(stop.customer_id)
+                service_min = (float(getattr(cust, "service_time_min", DEFAULT_SERVICE_TIME_MIN))
+                               if cust is not None else DEFAULT_SERVICE_TIME_MIN)
+                stop.actual_departure = arrival + timedelta(minutes=service_min)
+                if cust is not None:
+                    vehicle.pos = cust.location
+                vehicle.current_stop_index = stop.sequence
+                vehicle.status = VehicleStatus.ON_ROUTE
+                self._deliver(state, vehicle, stop.customer_id)
+                cur_node = stop.customer_id
+                cur_time = stop.actual_departure
+
             all_visited = route.stops and all(
                 s.actual_arrival is not None for s in route.stops)
             shift_done = route.end_time is None or state.clock >= route.end_time

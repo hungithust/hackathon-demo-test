@@ -1,6 +1,6 @@
 # Sovereign Brain — self-hosted, domain-tuned decision LLM
 
-> Version: 1.0 · Date: 2026-06-05
+> Version: 1.1 · Date: 2026-06-05 · (1.1: teacher = Sonnet 4.6 + Batch, dataset 1–3k, cost analysis)
 > Status: design approved, awaiting spec review
 > Scope: ONE of three competition-upgrade specs (the others: cuOpt-at-scale, demo-polish).
 > Context: NVIDIA Open Hackathon 2026 (Viettel × NVIDIA). Team server = 8× H200,
@@ -42,7 +42,8 @@ entirely on the team's H200s via a self-hosted NVIDIA NIM — slotted behind the
 |---|---|---|
 | Base model | **Llama-3.1-Nemotron-Nano-8B** | exact NIM in the Guide; 8B ample for structured decisions; fast to tune+serve; NVIDIA-branded |
 | Training stack | **HF PEFT/TRL LoRA → serve via NIM multi-LoRA** | low-risk, well-trodden; LoRA adapter loads into NIM so serving stays on the NVIDIA stack |
-| Teacher | existing `ClaudeAgent` (`claude-opus-4-8`) | already emits the exact `(action, reasoning, added_delay_min)` schema |
+| Teacher | Claude **Sonnet 4.6**, thinking **disabled**, via **Batch API** | near-Opus quality on this 7-way+reasoning task at a fraction of the cost; thinking off because we train on the JSON `reasoning` field, not omitted thinking content; emits the exact `(action, reasoning, added_delay_min)` schema (same as `ClaudeAgent`) |
+| Free fallback labeler | `RuleBasedEngine` (deterministic event→action) | $0 backup + coverage for rare event types the teacher sees too seldom |
 | Integration | new `NimAgent` reusing pure `build_messages`/`parse_decision`, transport injected | mirrors the established Claude/cuOpt injected-transport pattern |
 
 ## 4. Architecture — 5 stages
@@ -61,16 +62,29 @@ simulator scenarios ──▶ ClaudeAgent (teacher) ──▶ JSONL dataset
 ```
 
 ### 4.1 Data factory — `scripts/gen_dataset.py` (offline, not in runtime path)
-- Drive `WorldSimulator` over **N seeded scenarios** (target ≈ 3–5k labeled examples)
-  spanning all 4 disruption classes (supply / demand / transport / retail) and all
+- Drive `WorldSimulator` over **N seeded scenarios**. **Start at ~1,000 labeled examples;
+  scale to ~3,000 only if §6 eval demands it** — LoRA on this narrow 7-way+reasoning task
+  converges with little data, so generate-evaluate-then-grow rather than over-producing.
+  Span all 4 disruption classes (supply / demand / transport / retail) and all
   `EventSeverity` levels. Vary seeds, fleet size, pending load, and injected
   `disrupt_edge` states for diversity.
-- For each `(state, event)`: call `ClaudeAgent` teacher → `(action, reasoning, added_delay_min)`.
-- Backfill **rare event types** that Claude sees too seldom using `RuleBasedEngine` so every
-  `DecisionAction`/event combination has coverage.
+- For each `(state, event)`: call the **Sonnet 4.6 teacher (thinking off) via the Batch API**
+  → `(action, reasoning, added_delay_min)`. The teacher transport is its own thin function
+  (not the runtime `ClaudeAgent`, which is Opus+adaptive); it reuses the same structured-output
+  schema. Batch is ideal here: data-gen is not latency-sensitive.
+- Backfill **rare event types** that the teacher sees too seldom using `RuleBasedEngine` so every
+  `DecisionAction`/event combination has coverage. (`RuleBasedEngine` is also the **$0 fallback
+  labeler** if the team decides to spend nothing — at the cost of reasoning quality/generalization.)
 - Reuse `build_messages(state, event)` **verbatim** for the prompt fields → train/serve parity.
 - Output JSONL records: `{"system":…, "user":…, "assistant": {decision JSON}}`.
 - **Held-out split by scenario seed** (not by row) so no scenario leaks across train/test.
+
+### 4.1a Cost (data generation)
+Per label ≈ 200 input + ~100 output tokens (no thinking). At Sonnet 4.6 ($3/$15 per 1M)
+via Batch API (−50%): **~$1 for 1k labels, ~$3 for 3k**. Worst case (Opus 4.8, no batch,
+3k) is ~$10. Confirm exact token counts with `messages.count_tokens` on a real prompt
+before the run. The "data is too expensive to generate" concern does not apply — the
+prompts are tiny. $0 is also achievable via the rule-engine / templated-reasoning fallback.
 
 ### 4.2 Dataset format
 Instruction-tuning chat format matching the model's template. Assistant turn = the strict
@@ -125,7 +139,7 @@ API, runs on our hardware" story holds.
 
 | Unit | Purpose | Depends on | Runtime? |
 |---|---|---|---|
-| `scripts/gen_dataset.py` | scenarios → labeled JSONL | simulator, ClaudeAgent, rule engine | offline |
+| `scripts/gen_dataset.py` | scenarios → labeled JSONL | simulator, Sonnet-4.6 Batch teacher, rule engine | offline |
 | `scripts/train_lora.py` | JSONL → LoRA adapter | HF/TRL/PEFT, H200 | offline |
 | `scripts/eval_brain.py` | metrics + report | simulator, agents | offline |
 | `fleet/agent/nim_agent.py` | `DecisionEngine` over NIM | pure prompt fns, injected transport | **runtime** |
@@ -140,7 +154,8 @@ never hits the network, never needs a GPU (transport injected) — same discipli
 | Risk | Mitigation |
 |---|---|
 | Fine-tune underperforms teacher | base-NIM fallback keeps the self-hosted story; report agreement honestly |
-| Data too uniform (Claude picks same action) | rule-engine backfill + seed/scenario diversity; report per-event-type coverage |
+| Data too uniform (teacher picks same action) | rule-engine backfill + seed/scenario diversity; report per-event-type coverage |
+| Labeling cost / no budget | Sonnet 4.6 + Batch keeps 1–3k labels at ~$1–3; rule-engine/templated-reasoning path is $0 |
 | NIM LoRA serving setup eats the clock | base NIM (no adapter) is a valid milestone; LoRA is the stretch within the flagship |
 | Time pressure | stages are independently shippable: NIM-serve → NimAgent → dataset → fine-tune → eval |
 
