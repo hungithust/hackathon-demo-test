@@ -10,7 +10,7 @@ from fleet.contracts.state import WorldState, ApprovalStatus
 from fleet.factory import Components
 from fleet.dispatch.approval import should_auto_approve
 from fleet.dispatch.dispatcher import RESOLVE_ACTIONS
-from fleet.routing.planner import plan_routes, reroute
+from fleet.routing.planner import plan_routes, reroute, plan_total_minutes
 
 
 def _reconcile_detected(state: WorldState, detected) -> None:
@@ -48,6 +48,7 @@ def run_loop(state: WorldState, components: Components, n_ticks: int,
         decisions = components.decision_engine.decide(state, events)
 
         needs_resolve = False
+        resolve_decisions = []
         for d in decisions:
             state.decisions.append(d)
             severity = severity_by_event.get(d.event_id)
@@ -58,6 +59,7 @@ def run_loop(state: WorldState, components: Components, n_ticks: int,
                 components.dispatcher.apply(state, d)
                 if d.action in RESOLVE_ACTIONS:
                     needs_resolve = True
+                    resolve_decisions.append(d)
                 verdict = "AUTO-APPLIED"
             else:
                 verdict = "QUEUED(approval)"
@@ -65,7 +67,13 @@ def run_loop(state: WorldState, components: Components, n_ticks: int,
                    f"{d.action.value} <- {d.event_id} [{verdict}]")
 
         if needs_resolve and state.total_orders_pending() > 0:
+            before = plan_total_minutes(state)
             reroute(state, components.optimizer)
+            added = max(0.0, plan_total_minutes(state) - before)
+            # Record the *measured* delay the re-solve caused, replacing the
+            # engine's self-estimate so the UI reflects reality.
+            for d in resolve_decisions:
+                d.impact_estimate["added_delay_min"] = round(added, 1)
 
         logger(f"t={state.sim_tick} clock={state.clock} "
                f"active_events={len(state.get_active_events())} "

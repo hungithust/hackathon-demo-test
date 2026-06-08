@@ -30,19 +30,52 @@ const RIVER = "M1020,300 C820,360 760,470 700,560 C660,620 720,700 560,720 L1080
 function DispatchMap({ state, selectedVeh, onSelectVeh, selectedEvent }) {
   const [tip, setTip] = React.useState(null);
   const [mouse, setMouse] = React.useState({ x: 0, y: 0 });
+  const [view, setView] = React.useState({ k: 1, x: 0, y: 0 }); // zoom/pan transform
   const wrapRef = React.useRef(null);
+  const svgRef = React.useRef(null);
+  const drag = React.useRef(null);
+
+  // client (px) -> viewBox user coords, accounting for preserveAspectRatio="slice"
+  const toUser = (clientX, clientY) => {
+    const svg = svgRef.current;
+    const ctm = svg && svg.getScreenCTM();
+    if (!ctm) return { x: 0, y: 0, a: 1, d: 1 };
+    const inv = ctm.inverse();
+    return { x: clientX * inv.a + clientY * inv.c + inv.e,
+             y: clientX * inv.b + clientY * inv.d + inv.f, a: ctm.a, d: ctm.d };
+  };
 
   const onMove = (e) => {
     const r = wrapRef.current.getBoundingClientRect();
     setMouse({ x: e.clientX - r.left, y: e.clientY - r.top });
+    if (drag.current) {
+      const ctm = svgRef.current.getScreenCTM();
+      setView((v) => ({ ...v,
+        x: v.x + (e.clientX - drag.current.x) / (ctm ? ctm.a : 1),
+        y: v.y + (e.clientY - drag.current.y) / (ctm ? ctm.d : 1) }));
+      drag.current = { x: e.clientX, y: e.clientY };
+    }
   };
+  const onWheel = (e) => {
+    e.preventDefault();
+    const u = toUser(e.clientX, e.clientY);            // cursor in viewBox coords
+    setView((v) => {
+      const k = Math.max(1, Math.min(8, v.k * (e.deltaY < 0 ? 1.15 : 1 / 1.15)));
+      const ratio = k / v.k;
+      return { k, x: u.x - ratio * (u.x - v.x), y: u.y - ratio * (u.y - v.y) };
+    });
+  };
+  const onDown = (e) => { drag.current = { x: e.clientX, y: e.clientY }; };
+  const endDrag = () => { drag.current = null; };
+  const resetView = () => setView({ k: 1, x: 0, y: 0 });
 
-  // fixed nodes (depot + customers) define the projection bounds, so the layout
-  // stays stable while vehicles move.
+  // fixed nodes (depot + customers) plus real road geometry define the projection
+  // bounds, so the layout stays stable while vehicles move and roads aren't clipped.
   const nodes = { DEPOT: { lat: state.depot.lat, lng: state.depot.lng, name: state.depot.name } };
   state.customers.forEach((c) => { nodes[c.id] = c; });
   const lats = Object.values(nodes).map((n) => n.lat);
   const lngs = Object.values(nodes).map((n) => n.lng);
+  (state.routes || []).forEach((r) => (r.path || []).forEach(([lng, lat]) => { lats.push(lat); lngs.push(lng); }));
   const LAT_MIN = Math.min(...lats), LAT_MAX = Math.max(...lats);
   const LNG_MIN = Math.min(...lngs), LNG_MAX = Math.max(...lngs);
   const project = (lat, lng) => ({
@@ -52,12 +85,31 @@ function DispatchMap({ state, selectedVeh, onSelectVeh, selectedEvent }) {
   const PNODES = Object.fromEntries(Object.entries(nodes).map(([k, n]) => [k, project(n.lat, n.lng)]));
   const nodeKey = (raw) => (raw || "").split("#")[0]; // strip parallel-edge suffix
 
-  // event marker positions
+  // real road geometry, keyed by edge id, projected to viewBox path strings
+  const routeByEdge = {};
+  (state.routes || []).forEach((r) => { routeByEdge[r.edge_id] = r.path; });
+  const pathStr = (path) => (path || [])
+    .map(([lng, lat], i) => { const p = project(lat, lng); return (i ? "L" : "M") + p.x.toFixed(1) + "," + p.y.toFixed(1); })
+    .join(" ");
+  // de-dupe A->B / B->A so the base network isn't drawn twice
+  const baseRoads = [];
+  const seenBase = new Set();
+  (state.routes || []).forEach((r) => {
+    const [a, b] = r.edge_id.split("->").map(nodeKey);
+    const key = a < b ? a + "|" + b : b + "|" + a;
+    if (seenBase.has(key)) return;
+    seenBase.add(key);
+    baseRoads.push(r);
+  });
+
+  // event marker positions: edge events ride the real road geometry's midpoint
   const eventMarks = state.events.map((e) => {
     let pt = null;
     if (e.target.includes("->")) {
-      const [a, b] = e.target.split("->").map(nodeKey);
-      if (PNODES[a] && PNODES[b]) pt = { x: (PNODES[a].x + PNODES[b].x) / 2, y: (PNODES[a].y + PNODES[b].y) / 2 };
+      const path = routeByEdge[e.target];
+      if (path && path.length) { const [lng, lat] = path[Math.floor(path.length / 2)]; pt = project(lat, lng); }
+      else { const [a, b] = e.target.split("->").map(nodeKey);
+        if (PNODES[a] && PNODES[b]) pt = { x: (PNODES[a].x + PNODES[b].x) / 2, y: (PNODES[a].y + PNODES[b].y) / 2 }; }
     } else if (PNODES[e.target]) pt = PNODES[e.target];
     else if (e.target[0] === "V") {
       const v = state.vehicles.find((vv) => vv.id === e.target);
@@ -67,8 +119,11 @@ function DispatchMap({ state, selectedVeh, onSelectVeh, selectedEvent }) {
   }).filter(Boolean);
 
   return (
-    <div className="map-wrap" ref={wrapRef} onMouseMove={onMove} onMouseLeave={() => setTip(null)}>
-      <svg className="map-svg" viewBox={`0 0 ${VB_W} ${VB_H}`} preserveAspectRatio="xMidYMid slice">
+    <div className="map-wrap" ref={wrapRef} onMouseMove={onMove}
+         onMouseLeave={() => { setTip(null); endDrag(); }}>
+      <svg ref={svgRef} className="map-svg" viewBox={`0 0 ${VB_W} ${VB_H}`} preserveAspectRatio="xMidYMid slice"
+           onWheel={onWheel} onMouseDown={onDown} onMouseUp={endDrag}
+           style={{ cursor: drag.current ? "grabbing" : "grab" }}>
         <defs>
           <radialGradient id="depotGlow" cx="50%" cy="50%" r="50%">
             <stop offset="0%" stopColor="#F5C451" stopOpacity=".5"/>
@@ -77,31 +132,30 @@ function DispatchMap({ state, selectedVeh, onSelectVeh, selectedEvent }) {
           <filter id="soft"><feGaussianBlur stdDeviation="2.2"/></filter>
         </defs>
 
+        <g transform={`translate(${view.x},${view.y}) scale(${view.k})`}>
         <path d={RIVER} fill="rgba(38,86,127,.16)" stroke="rgba(77,166,255,.12)" strokeWidth="1.5"/>
 
-        <g stroke="#15203a" strokeWidth="2" fill="none" strokeLinecap="round">
+        <g stroke="#131d33" strokeWidth="1.4" fill="none" strokeLinecap="round" opacity=".35">
           {STREETS.map((d, i) => <path key={i} d={d}/>)}
         </g>
-        <g stroke="#101a30" strokeWidth="1" fill="none" opacity=".7">
-          {STREETS.map((d, i) => <path key={i} d={d} transform="translate(18,14)"/>)}
+
+        {/* real road network (OSM / synthetic geometry) */}
+        <g stroke="#26344f" strokeWidth="2.2" fill="none" strokeLinecap="round" strokeLinejoin="round">
+          {baseRoads.map((r) => <path key={r.edge_id} d={pathStr(r.path)}/>)}
         </g>
 
-        {/* base road links depot<->customers */}
-        <g stroke="#26344f" strokeWidth="2.4" fill="none" strokeLinecap="round">
-          {state.customers.map((c) => (
-            <line key={c.id} x1={PNODES.DEPOT.x} y1={PNODES.DEPOT.y} x2={PNODES[c.id].x} y2={PNODES[c.id].y}/>
-          ))}
-        </g>
-
-        {/* active vehicle routes */}
+        {/* active vehicle routes, following the real roads */}
         {state.vehicles.map((v) => {
-          const route = (v.route_nodes || ["DEPOT"]).filter((n) => PNODES[n]);
-          if (route.length < 2) return null;
-          const d = route.map((n, i) => (i === 0 ? "M" : "L") + PNODES[n].x + "," + PNODES[n].y).join(" ");
+          const path = (v.route_path && v.route_path.length >= 2)
+            ? pathStr(v.route_path)
+            : ((v.route_nodes || []).filter((n) => PNODES[n]).length >= 2
+                ? (v.route_nodes || []).filter((n) => PNODES[n]).map((n, i) => (i ? "L" : "M") + PNODES[n].x + "," + PNODES[n].y).join(" ")
+                : null);
+          if (!path) return null;
           const on = selectedVeh === v.id;
           const broken = v.status === "broken";
           return (
-            <path key={"r" + v.id} d={d} fill="none"
+            <path key={"r" + v.id} d={path} fill="none"
               stroke={broken ? "rgba(255,77,94,.5)" : (on ? "#7ec0ff" : "rgba(77,166,255,.45)")}
               strokeWidth={on ? 3.4 : 2.2} strokeDasharray="2 9" strokeLinecap="round"
               className="route-flow" style={{ opacity: on ? 1 : .8 }}/>
@@ -174,6 +228,7 @@ function DispatchMap({ state, selectedVeh, onSelectVeh, selectedEvent }) {
             </g>
           );
         })}
+        </g>
       </svg>
 
       <div className="map-title">
@@ -196,9 +251,25 @@ function DispatchMap({ state, selectedVeh, onSelectVeh, selectedEvent }) {
         <div className="legend-row"><span className="ldot" style={{ background: "#FF4D5E" }}></span> Active event</div>
       </div>
 
+      <div className="map-zoom" style={{ position: "absolute", right: 14, bottom: 14, display: "flex",
+        gap: 6, alignItems: "center", zIndex: 5 }}>
+        <button title="Zoom out" onClick={() => setView((v) => { const k = Math.max(1, v.k / 1.3); const ratio = k / v.k; return { k, x: VB_W / 2 - ratio * (VB_W / 2 - v.x), y: VB_H / 2 - ratio * (VB_H / 2 - v.y) }; })}
+          style={zbtn}>−</button>
+        <span style={{ fontFamily: "var(--mono)", fontSize: 11, color: "#aeb8cf", minWidth: 34, textAlign: "center" }}>{view.k.toFixed(1)}×</span>
+        <button title="Zoom in" onClick={() => setView((v) => { const k = Math.min(8, v.k * 1.3); const ratio = k / v.k; return { k, x: VB_W / 2 - ratio * (VB_W / 2 - v.x), y: VB_H / 2 - ratio * (VB_H / 2 - v.y) }; })}
+          style={zbtn}>+</button>
+        <button title="Reset view" onClick={resetView} style={{ ...zbtn, width: "auto", padding: "0 8px" }}>Reset</button>
+      </div>
+
       <MapTip tip={tip} mouse={mouse}/>
     </div>
   );
 }
+
+const zbtn = {
+  width: 26, height: 26, borderRadius: 6, border: "1px solid #2a3650",
+  background: "rgba(12,18,32,.85)", color: "#cfd6e6", cursor: "pointer",
+  fontSize: 15, lineHeight: "22px", fontWeight: 600,
+};
 
 window.DispatchMap = DispatchMap;

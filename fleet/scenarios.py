@@ -163,6 +163,31 @@ def build_real_state(graph, customers: Optional[List[tuple]] = None,
         _add("DEPOT", cid, r.distance_km, r.minutes, r.polyline)
         _add(cid, "DEPOT", r.distance_km, r.minutes, list(reversed(r.polyline)))
 
+    # customer <-> customer roads (k nearest neighbours, routed over the real
+    # graph). Without these the world is a star through DEPOT: blocking/flooding a
+    # DEPOT->Cx edge isolates Cx with no alternative, so a reroute can never route
+    # *around* anything. The k-nearest cap keeps this from becoming an O(N^2) OSM
+    # routing blow-up while still giving every customer real detour options.
+    import math as _math
+    cids = list(cust_objs.keys())
+
+    def _straight_km(a, b) -> float:
+        la, lo = cust_objs[a].location, cust_objs[b].location
+        return _math.hypot(la.lat - lo.lat, la.lng - lo.lng) * 111.0
+
+    k = min(4, len(cids) - 1)
+    for a in cids:
+        nearest = sorted((b for b in cids if b != a),
+                         key=lambda b: _straight_km(a, b))[:k]
+        for b in nearest:
+            if f"{a}->{b}" in edges:
+                continue
+            ca, cb = cust_objs[a].location, cust_objs[b].location
+            r = route(graph, (ca.lat, ca.lng), (cb.lat, cb.lng),
+                      urban_speed_kmh=urban_speed_kmh)
+            _add(a, b, r.distance_km, r.minutes, r.polyline)
+            _add(b, a, r.distance_km, r.minutes, list(reversed(r.polyline)))
+
     # Flood-prone parallel DEPOT<->C001 route (spec §6.9): shorter but FLOODED, so
     # standard trucks (wade 0.3 m) cannot use it while flooded — keeps M3's
     # per-veh_type matrix logic exercised. Geometry reuses the primary route.

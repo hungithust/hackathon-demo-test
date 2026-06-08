@@ -22,7 +22,9 @@ def plan_routes(state: WorldState, optimizer: RouteOptimizer,
         stops = [
             Stop(customer_id=ss.customer_id, sequence=k,
                  planned_arrival=ss.arrival, planned_departure=ss.departure,
-                 load_after_stop=ss.load_after)
+                 load_after_stop=ss.load_after,
+                 demand_kg=float(sum(state.customers[ss.customer_id].orders.values()))
+                 if ss.customer_id in state.customers else 0.0)
             for k, ss in enumerate(solved, start=1)
         ]
         state.plan[vid] = VehicleRoute(
@@ -32,6 +34,18 @@ def plan_routes(state: WorldState, optimizer: RouteOptimizer,
             end_time=stops[-1].planned_departure,
         )
     return solution.dropped
+
+
+def plan_total_minutes(state: WorldState) -> float:
+    """Total planned drive time across the current plan (sum of each route's
+    start->end span, minutes). Used to measure the *realized* delay a reroute
+    introduces, so the UI shows a real number instead of the LLM's self-estimate."""
+    total = 0.0
+    for route in state.plan.values():
+        if route.start_time is None or route.end_time is None:
+            continue
+        total += (route.end_time - route.start_time).total_seconds() / 60.0
+    return total
 
 
 def reroute(state: WorldState, optimizer: RouteOptimizer,

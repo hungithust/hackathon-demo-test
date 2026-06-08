@@ -37,6 +37,45 @@ def shortest_times_from(graph: RoadGraph, source: str,
     return dist
 
 
+def shortest_path_edges(graph: RoadGraph, source: str, dest: str,
+                        wade_capability: float) -> List[str]:
+    """Edge-id sequence of the min-time route source->dest for a vehicle of the
+    given wade capability, or [] if dest is unreachable. Used to reconstruct the
+    real road geometry a vehicle drives along (a leg may run through DEPOT)."""
+    if source == dest:
+        return []
+    dist: Dict[str, float] = {source: 0.0}
+    prev_edge: Dict[str, str] = {}
+    pq: List = [(0.0, source)]
+    while pq:
+        d, u = heapq.heappop(pq)
+        if u == dest:
+            break
+        if d > dist.get(u, INF):
+            continue
+        for edge in graph.out_edges(u):
+            if not edge.is_passable(wade_capability):
+                continue
+            nd = d + edge.effective_time
+            if nd < dist.get(edge.to_node, INF):
+                dist[edge.to_node] = nd
+                prev_edge[edge.to_node] = edge.id
+                heapq.heappush(pq, (nd, edge.to_node))
+    if dest not in prev_edge:
+        return []
+    path: List[str] = []
+    cur = dest
+    while cur != source:
+        eid = prev_edge.get(cur)
+        if eid is None:
+            return []
+        edge = graph.get_edge(eid)
+        path.append(eid)
+        cur = edge.from_node
+    path.reverse()
+    return path
+
+
 def build_time_matrix(graph: RoadGraph, locations: List[str],
                       wade_capability: float) -> List[List[float]]:
     """N×N travel-time matrix (minutes) over `locations`, indexed by position in

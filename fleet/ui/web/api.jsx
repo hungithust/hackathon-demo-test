@@ -25,6 +25,7 @@ function normalize(snap) {
     decisions: snap.pending_decisions || [],
     resolved: snap.resolved || [],
     autoHandled: snap.auto_handled || [],
+    routes: snap.routes || [],
   };
 }
 
@@ -32,7 +33,7 @@ function emptyState() {
   return {
     clock: new Date().toISOString().slice(0, 19), sim_tick: 0, pending_orders: 0,
     depot: { lat: 10.8231, lng: 106.6297, name: "Depot" },
-    customers: [], vehicles: [], events: [], decisions: [], resolved: [], autoHandled: [],
+    customers: [], vehicles: [], events: [], decisions: [], resolved: [], autoHandled: [], routes: [],
   };
 }
 

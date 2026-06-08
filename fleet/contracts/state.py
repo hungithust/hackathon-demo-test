@@ -131,6 +131,7 @@ class Stop:
     actual_arrival: Optional[datetime] = None
     actual_departure: Optional[datetime] = None
     load_after_stop: float = 0.0
+    demand_kg: float = 0.0          # kg to deliver at this stop (for live load %)
 
 
 @dataclass

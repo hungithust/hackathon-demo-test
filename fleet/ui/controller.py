@@ -3,18 +3,42 @@ front end can drive it without touching engine internals: step the world, read a
 JSON-friendly snapshot, and approve/reject queued decisions. Reuses run_loop and
 reroute so the UI behaves identically to the headless loop."""
 
-from typing import Dict, List, Optional
+import math
+from datetime import timedelta
+from typing import Dict, List, Optional, Tuple
 
-from fleet.contracts.state import ApprovalStatus
+from fleet.contracts.state import ApprovalStatus, VehicleStatus
 from fleet.scenarios import build_sample_state, build_real_state
 from fleet.factory import build_components
 from fleet.dispatch.dispatcher import RESOLVE_ACTIONS
-from fleet.routing.planner import reroute
+from fleet.routing.planner import reroute, plan_total_minutes
+from fleet.routing.matrix import shortest_times_from, shortest_path_edges
 from config.settings import load_settings
 
 
 def _silent(*_args, **_kwargs):
     pass
+
+
+def _interp_polyline(poly: List[Tuple[float, float]], frac: float):
+    """Point at `frac` (0..1) of the way along a (lat,lng) polyline, by length."""
+    if not poly:
+        return None
+    if len(poly) == 1 or frac <= 0:
+        return poly[0]
+    if frac >= 1:
+        return poly[-1]
+    seg = [math.hypot(b[0] - a[0], b[1] - a[1]) for a, b in zip(poly[:-1], poly[1:])]
+    total = sum(seg)
+    if total <= 0:
+        return poly[0]
+    target, acc = frac * total, 0.0
+    for (a, b), d in zip(zip(poly[:-1], poly[1:]), seg):
+        if acc + d >= target:
+            t = (target - acc) / d if d > 0 else 0.0
+            return (a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t)
+        acc += d
+    return poly[-1]
 
 
 class SimulationController:
@@ -106,16 +130,95 @@ class SimulationController:
         route_nodes = self._route_nodes(v.id)
         # next node on the route after the current stop index (clamped)
         nxt = min(max(v.current_stop_index, 0) + 1, len(route_nodes) - 1)
-        cap = v.capacity_kg or 1.0
+        lat, lng = self._vehicle_position(v)
         return {
             "id": v.id, "status": v.status.value,
-            "lat": v.pos.lat, "lng": v.pos.lng,
+            "lat": lat, "lng": lng,
             "stop_index": v.current_stop_index,
             "capacity_kg": v.capacity_kg,
-            "load_pct": round(100.0 * v.current_load_kg / cap),
+            "load_pct": self._load_pct(v),
             "route_nodes": route_nodes,
+            "route_path": self._route_path(v),       # [[lng,lat]...] along real roads
             "leg_to": route_nodes[nxt] if route_nodes else "DEPOT",
         }
+
+    def _load_pct(self, v) -> int:
+        """Carried load = goods for stops not yet delivered, as % of capacity. The
+        engine never tracks current_load_kg, so derive it from the live plan."""
+        cap = v.capacity_kg or 1.0
+        vr = self.state.plan.get(v.id)
+        if not vr or not vr.stops:
+            return 0
+        carried = sum(s.demand_kg for s in vr.stops if s.actual_arrival is None)
+        return round(100.0 * carried / cap)
+
+    # ----- geometry: drive vehicles along real roads, between ticks -----
+    def _node_latlng(self, node: str):
+        n = self.state.road_graph.nodes.get(node)
+        return (n.location.lat, n.location.lng) if n else None
+
+    def _leg_polyline(self, from_node: str, to_node: str,
+                      wade: float) -> List[Tuple[float, float]]:
+        """Real (lat,lng) polyline a vehicle drives from from_node to to_node,
+        concatenating the shortest-path edge geometries (the leg may pass through
+        DEPOT). Falls back to a straight segment when geometry is missing."""
+        poly: List[Tuple[float, float]] = []
+        for eid in shortest_path_edges(self.state.road_graph, from_node, to_node, wade):
+            g = self.geometry.get(eid)
+            if not g:
+                e = self.state.road_graph.get_edge(eid)
+                a, b = self._node_latlng(e.from_node), self._node_latlng(e.to_node)
+                g = [a, b] if a and b else []
+            for pt in g:
+                t = (float(pt[0]), float(pt[1]))
+                if not poly or poly[-1] != t:
+                    poly.append(t)
+        if not poly:
+            a, b = self._node_latlng(from_node), self._node_latlng(to_node)
+            poly = [a, b] if a and b else []
+        return poly
+
+    def _route_path(self, v) -> List[List[float]]:
+        """Whole planned route as one [[lng,lat]...] polyline along real roads."""
+        route_nodes = self._route_nodes(v.id)
+        if len(route_nodes) < 2:
+            return []
+        wade = float(v.wade_capability)
+        out: List[List[float]] = []
+        for a, b in zip(route_nodes[:-1], route_nodes[1:]):
+            for (lat, lng) in self._leg_polyline(a, b, wade):
+                ll = [lng, lat]
+                if not out or out[-1] != ll:
+                    out.append(ll)
+        return out
+
+    def _vehicle_position(self, v) -> Tuple[float, float]:
+        """Interpolate the vehicle along its current leg by sim-time progress, so
+        it crawls along the road between ticks instead of teleporting node-to-node."""
+        default = (v.pos.lat, v.pos.lng)
+        if v.status in (VehicleStatus.BROKEN, VehicleStatus.MAINTENANCE):
+            return default
+        vr = self.state.plan.get(v.id)
+        if not vr or not vr.stops:
+            return default
+        stops = sorted(vr.stops, key=lambda s: s.sequence)
+        nxt = next((s for s in stops if s.actual_arrival is None), None)
+        if nxt is None:                                  # route done -> engine pos
+            return default
+        visited = [s for s in stops if s.actual_arrival is not None]
+        from_node = visited[-1].customer_id if visited else "DEPOT"
+        to_node = nxt.customer_id
+        wade = float(v.wade_capability)
+        leg_min = shortest_times_from(self.state.road_graph, from_node, wade).get(to_node)
+        if not leg_min or leg_min <= 0:
+            return default
+        from_time = nxt.planned_arrival - timedelta(minutes=leg_min)
+        span = (nxt.planned_arrival - from_time).total_seconds()
+        if span <= 0:
+            return self._node_latlng(to_node) or default
+        frac = max(0.0, min(1.0, (self.state.clock - from_time).total_seconds() / span))
+        pt = _interp_polyline(self._leg_polyline(from_node, to_node, wade), frac)
+        return pt or default
 
     # ----- view model -----
     def snapshot(self) -> Dict:
@@ -191,7 +294,10 @@ class SimulationController:
         d.approved_at = self.state.clock
         self.components.dispatcher.apply(self.state, d)
         if d.action in RESOLVE_ACTIONS and self.state.total_orders_pending() > 0:
+            before = plan_total_minutes(self.state)
             reroute(self.state, self.components.optimizer)
+            added = max(0.0, plan_total_minutes(self.state) - before)
+            d.impact_estimate["added_delay_min"] = round(added, 1)
         return d
 
     def reject(self, decision_id: str):
