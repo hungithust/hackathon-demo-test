@@ -25,6 +25,7 @@ function Icon({ name, size = 18, sw = 1.7 }) {
     accelerate: <><path d="M3 6l8 6-8 6V6zM12 6l8 6-8 6V6z"/></>,
 
     // ---- ui ----
+    gear: <><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M19.1 4.9L17 7M7 17l-2.1 2.1"/></>,
     play: <><path d="M6 4l14 8-14 8V4z" fill="currentColor" stroke="none"/></>,
     pause: <><rect x="6" y="5" width="4" height="14" rx="1" fill="currentColor" stroke="none"/><rect x="14" y="5" width="4" height="14" rx="1" fill="currentColor" stroke="none"/></>,
     step: <><path d="M5 5v14l9-7-9-7z"/><path d="M18 5v14"/></>,

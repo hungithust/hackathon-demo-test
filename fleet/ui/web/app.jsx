@@ -12,6 +12,7 @@ function App() {
   const [selectedVeh, setSelectedVeh] = React.useState(null);
   const [selectedEvent, setSelectedEvent] = React.useState(null);
   const [queueView, setQueueView] = React.useState("pending");
+  const [settingsOpen, setSettingsOpen] = React.useState(false);
   const tick = React.useRef(null);
   const inflight = React.useRef(false);
 
@@ -81,7 +82,8 @@ function App() {
         </div>
         <KPIBar state={state}/>
         <SimControls playing={playing} speed={speed}
-          onPlay={() => setPlaying((p) => !p)} onStep={doStep} onReset={doReset} onSpeed={setSpeed}/>
+          onPlay={() => setPlaying((p) => !p)} onStep={doStep} onReset={doReset} onSpeed={setSpeed}
+          onOpenSettings={() => setSettingsOpen(true)}/>
       </header>
 
       <div className="workspace">
@@ -101,6 +103,8 @@ function App() {
           <VoicePanel onReport={onReport} clock={state.clock}/>
         </div>
       </div>
+      <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)}
+        onApplied={(snap) => { setPlaying(false); apply(snap); }}/>
     </div>
   );
 }

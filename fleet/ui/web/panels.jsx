@@ -35,7 +35,7 @@ function KPIBar({ state }) {
 }
 
 // ---------------- SIM CONTROLS ----------------
-function SimControls({ playing, speed, onPlay, onStep, onReset, onSpeed }) {
+function SimControls({ playing, speed, onPlay, onStep, onReset, onSpeed, onOpenSettings }) {
   return (
     <div className="simctl">
       <button className={"btn " + (playing ? "pausebtn" : "play")} onClick={onPlay} title={playing ? "Pause" : "Play"}>
@@ -49,6 +49,7 @@ function SimControls({ playing, speed, onPlay, onStep, onReset, onSpeed }) {
       <button className="btn ghost icon" onClick={() => onStep(1)} title="Step 1 tick"><Icon name="step" size={15}/></button>
       <button className="btn ghost icon" onClick={() => onStep(5)} title="Step 5 ticks"><Icon name="step5" size={15}/></button>
       <button className="btn ghost icon" onClick={onReset} title="Reset world"><Icon name="reset" size={15}/></button>
+      <button className="btn ghost icon" onClick={onOpenSettings} title="Settings"><Icon name="gear" size={15}/></button>
     </div>
   );
 }
