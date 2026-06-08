@@ -15,7 +15,7 @@ class Settings:
     seed: int = 42
     tick_minutes: int = 5
     anthropic_api_key: str = ""
-    cuopt_endpoint: str = ""
+    cuopt_endpoint: str = "localhost:8001"
     auto_approve_delay_threshold_min: float = 15.0   # spec §6.6
     sla_critical_threshold_min: float = 30.0         # spec §6.2
     demand_noise: float = 0.3                        # M2: demand multiplicative noise (±)
@@ -77,7 +77,7 @@ def load_settings(env: Optional[Mapping[str, str]] = None) -> Settings:
         seed=int(e.get("SEED", "42")),
         tick_minutes=int(e.get("TICK_MINUTES", "5")),
         anthropic_api_key=e.get("ANTHROPIC_API_KEY", ""),
-        cuopt_endpoint=e.get("CUOPT_ENDPOINT", ""),
+        cuopt_endpoint=e.get("CUOPT_ENDPOINT", "localhost:8001"),
         auto_approve_delay_threshold_min=float(
             e.get("AUTO_APPROVE_DELAY_THRESHOLD_MIN", "15")),
         sla_critical_threshold_min=float(

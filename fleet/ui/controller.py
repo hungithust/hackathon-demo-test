@@ -50,7 +50,7 @@ class SimulationController:
         elif getattr(self.settings, "world", "sample") == "real":
             self.state = self._load_real_world()
         else:
-            self.state = build_sample_state()
+            self.state = build_sample_state(urban_speed_kmh=self.settings.urban_speed_kmh)
             self.geometry = self._generate_synthetic_geometry(self.state)
         self.components = build_components(self.settings)
 
@@ -72,18 +72,19 @@ class SimulationController:
                 ox, oy = -dy, dx
                 # Deterministic random offset per edge
                 rng = random.Random(hash(edge.from_node + edge.to_node))
-                offset = (rng.random() - 0.5) * 0.5 * dist
                 
-                mid_lat = lat1 + dx/2 + ox * offset
-                mid_lng = lng1 + dy/2 + oy * offset
-                
-                q1_lat = lat1 + (mid_lat-lat1)/2 + ox * offset * 0.5
-                q1_lng = lng1 + (mid_lng-lng1)/2 + oy * offset * 0.5
-                
-                q3_lat = mid_lat + (lat2-mid_lat)/2 - ox * offset * 0.5
-                q3_lng = mid_lng + (lng2-mid_lng)/2 - oy * offset * 0.5
-                
-                pts.extend([(q1_lat, q1_lng), (mid_lat, mid_lng), (q3_lat, q3_lng)])
+                # Create 5-7 intermediate points to make it zigzagged and winding like real roads
+                num_pts = rng.randint(5, 7)
+                for i in range(1, num_pts):
+                    progress = i / num_pts
+                    # Vibrate around the straight line, amplitude proportional to dist
+                    offset = (rng.random() - 0.5) * 0.8 * dist
+                    # Taper off the offset near the ends
+                    taper = math.sin(progress * math.pi)
+                    
+                    p_lat = lat1 + dx * progress + ox * offset * taper
+                    p_lng = lng1 + dy * progress + oy * offset * taper
+                    pts.append((p_lat, p_lng))
                 
             pts.append((lat2, lng2))
             geom[edge.id] = pts

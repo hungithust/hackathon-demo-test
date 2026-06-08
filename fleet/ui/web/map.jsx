@@ -45,7 +45,12 @@ function DispatchMap({ state, selectedVeh, onSelectVeh, selectedEvent }) {
              y: clientX * inv.b + clientY * inv.d + inv.f, a: ctm.a, d: ctm.d };
   };
 
-  const onMove = (e) => {
+  const onPointerDown = (e) => {
+    e.preventDefault(); 
+    e.currentTarget.setPointerCapture(e.pointerId);
+    drag.current = { x: e.clientX, y: e.clientY }; 
+  };
+  const onPointerMove = (e) => {
     const r = wrapRef.current.getBoundingClientRect();
     setMouse({ x: e.clientX - r.left, y: e.clientY - r.top });
     if (drag.current) {
@@ -56,17 +61,10 @@ function DispatchMap({ state, selectedVeh, onSelectVeh, selectedEvent }) {
       drag.current = { x: e.clientX, y: e.clientY };
     }
   };
-  const onWheel = (e) => {
-    e.preventDefault();
-    const u = toUser(e.clientX, e.clientY);            // cursor in viewBox coords
-    setView((v) => {
-      const k = Math.max(1, Math.min(8, v.k * (e.deltaY < 0 ? 1.15 : 1 / 1.15)));
-      const ratio = k / v.k;
-      return { k, x: u.x - ratio * (u.x - v.x), y: u.y - ratio * (u.y - v.y) };
-    });
+  const onPointerUp = (e) => {
+    e.currentTarget.releasePointerCapture(e.pointerId);
+    drag.current = null;
   };
-  const onDown = (e) => { drag.current = { x: e.clientX, y: e.clientY }; };
-  const endDrag = () => { drag.current = null; };
   const resetView = () => setView({ k: 1, x: 0, y: 0 });
 
   // fixed nodes (depot + customers) plus real road geometry define the projection
@@ -118,12 +116,21 @@ function DispatchMap({ state, selectedVeh, onSelectVeh, selectedEvent }) {
     return pt ? { ...e, ...pt } : null;
   }).filter(Boolean);
 
+  const onWheel = (e) => {
+    e.preventDefault();
+    const u = toUser(e.clientX, e.clientY);            // cursor in viewBox coords
+    setView((v) => {
+      const k = Math.max(1, Math.min(8, v.k * (e.deltaY < 0 ? 1.15 : 1 / 1.15)));
+      const ratio = k / v.k;
+      return { k, x: u.x - ratio * (u.x - v.x), y: u.y - ratio * (u.y - v.y) };
+    });
+  };
+
   return (
-    <div className="map-wrap" ref={wrapRef} onMouseMove={onMove}
-         onMouseLeave={() => { setTip(null); endDrag(); }}>
+    <div className="map-wrap" ref={wrapRef}>
       <svg ref={svgRef} className="map-svg" viewBox={`0 0 ${VB_W} ${VB_H}`} preserveAspectRatio="xMidYMid slice"
-           onWheel={onWheel} onMouseDown={onDown} onMouseUp={endDrag}
-           style={{ cursor: drag.current ? "grabbing" : "grab" }}>
+           onWheel={onWheel} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp}
+           style={{ cursor: drag.current ? "grabbing" : "grab", touchAction: "none" }}>
         <defs>
           <radialGradient id="depotGlow" cx="50%" cy="50%" r="50%">
             <stop offset="0%" stopColor="#F5C451" stopOpacity=".5"/>

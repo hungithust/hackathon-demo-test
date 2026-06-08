@@ -25,8 +25,9 @@ class RuleBasedEngine:
     def decide(self, state: WorldState, events: List[Event]) -> List[Decision]:
         out: List[Decision] = []
         for e in events:
-            self._seq += 1
             action = _ACTION_BY_EVENT.get(e.event_type, DecisionAction.REROUTE)
+
+            self._seq += 1
             out.append(Decision(
                 id=f"DEC_{self._seq:03d}", timestamp=state.clock, event_id=e.id,
                 action=action, engine=DecisionEngine.RULE_BASED,

@@ -69,7 +69,6 @@ def to_cuopt_request(problem: RoutingProblem) -> dict:
             "demand": [demand_row],
             "task_time_windows": tws,
             "service_times": service,
-            "penalties": penalties,
         },
         "fleet_data": {
             "vehicle_locations": veh_locations,
@@ -82,7 +81,12 @@ def to_cuopt_request(problem: RoutingProblem) -> dict:
 
 def from_cuopt_response(problem: RoutingProblem, response: dict,
                         base: datetime) -> RoutingSolution:
-    sr = response["response"]["solver_response"]
+    res = response.get("response", {})
+    if isinstance(res, dict):
+        sr = res.get("solver_response", res)
+    else:
+        sr = {"status": -1}
+    
     status = sr.get("status", 0)
 
     routes: Dict[str, List[SolvedStop]] = {f.id: [] for f in problem.fleet}
@@ -194,6 +198,11 @@ class CuOptAdapter:
                     sol_data = sol_response.json()
 
                     if "response" in sol_data:
+                        import json
+                        print("\n" + "="*50)
+                        print("[CuOptAdapter] RAW API RESPONSE FROM LOCAL CUOPT:")
+                        print(json.dumps(sol_data, indent=2))
+                        print("="*50 + "\n")
                         return sol_data
                 except requests.exceptions.RequestException as e:
                     raise RuntimeError(f"Lỗi khi lấy kết quả từ cuOpt API: {e}")

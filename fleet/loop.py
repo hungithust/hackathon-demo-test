@@ -6,7 +6,7 @@ The same `state` + components are reused by the Streamlit UI in M7."""
 
 from typing import Callable
 
-from fleet.contracts.state import WorldState, ApprovalStatus
+from fleet.contracts.state import WorldState, ApprovalStatus, EventType
 from fleet.factory import Components
 from fleet.dispatch.approval import should_auto_approve
 from fleet.dispatch.dispatcher import RESOLVE_ACTIONS
@@ -43,7 +43,46 @@ def run_loop(state: WorldState, components: Components, n_ticks: int,
         # This bounds state.decisions and stops a standing condition re-firing
         # (and re-wiping the plan) every tick.
         handled = {d.event_id for d in state.decisions}
-        events = [e for e in state.get_active_events() if e.id not in handled]
+        events = []
+        for e in state.get_active_events():
+            if e.id in handled:
+                continue
+            
+            # Filter out traffic/flood that is not on any active route
+            if e.event_type in (EventType.TRAFFIC, EventType.FLOODED_AREA) and "->" in e.target:
+                edge_id = e.target
+                u, v = edge_id.split("->")
+                u = u.split("#")[0]
+                v = v.split("#")[0]
+
+                is_on_route = False
+                for vid, route in state.plan.items():
+                    stops = sorted(route.stops, key=lambda st: st.sequence)
+                    remaining_nodes = [st.customer_id for st in stops if st.actual_arrival is None]
+                    if remaining_nodes:
+                        from fleet.contracts.state import VehicleStatus
+                        veh = state.vehicles.get(vid)
+                        last_visited = "DEPOT"
+                        if veh and veh.current_stop_index >= 0:
+                            for st in stops:
+                                if st.sequence == veh.current_stop_index:
+                                    last_visited = st.customer_id
+                                    break
+                        full_remaining = [last_visited] + remaining_nodes + ["DEPOT"]
+                        
+                        for i in range(len(full_remaining) - 1):
+                            r_u, r_v = full_remaining[i], full_remaining[i+1]
+                            if (r_u == u and r_v == v) or (r_u == v and r_v == u):
+                                is_on_route = True
+                                break
+                    if is_on_route:
+                        break
+                
+                if not is_on_route:
+                    continue # Skip this event, it's irrelevant
+
+            events.append(e)
+
         severity_by_event = {e.id: e.severity for e in events}
         decisions = components.decision_engine.decide(state, events)
 

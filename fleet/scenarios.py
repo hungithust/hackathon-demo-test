@@ -13,7 +13,7 @@ from fleet.geo.router import route
 from fleet.geo.roster import HCM_CUSTOMERS
 
 
-def build_sample_state(base_time: datetime = datetime(2026, 6, 4, 6, 0)) -> WorldState:
+def build_sample_state(base_time: datetime = datetime(2026, 6, 4, 6, 0), urban_speed_kmh: float = 25.0) -> WorldState:
     import math
     import random
     
@@ -31,7 +31,7 @@ def build_sample_state(base_time: datetime = datetime(2026, 6, 4, 6, 0)) -> Worl
         vehicles[vid] = Vehicle(
             id=vid, capacity_kg=500, pos=depot_loc, current_load_kg=0,
             status=VehicleStatus.AT_DEPOT,
-            shift_start=base_time, shift_end=base_time + timedelta(hours=10),
+            shift_start=base_time, shift_end=base_time + timedelta(hours=48),
             veh_type="truck", wade_capability=0.3,
         )
 
@@ -40,14 +40,18 @@ def build_sample_state(base_time: datetime = datetime(2026, 6, 4, 6, 0)) -> Worl
     for i, (cid, ctype, lat, lng, name, orders, prio, tw_s, tw_e, sla_h) in enumerate(HCM_CUSTOMERS):
         if i in (2, 7):
             name = f"Kho Trung Chuyển {i}"
+        # Stretch the coordinates by 3x from the depot center (10.7760, 106.7000)
+        center_lat, center_lng = 10.7760, 106.7000
+        lat_stretched = center_lat + (lat - center_lat) * 3.0
+        lng_stretched = center_lng + (lng - center_lng) * 3.0
         customers[cid] = CustomerProfile(
             id=cid, type=ctype,
-            location=Location(lat, lng, name, name),
+            location=Location(lat_stretched, lng_stretched, name, name),
             orders=orders,
             time_window=TimeWindow(base_time + timedelta(hours=tw_s),
-                                   base_time + timedelta(hours=tw_e)),
+                                   base_time + timedelta(hours=tw_e * 10)),
             priority=prio,
-            sla_deadline=base_time + timedelta(hours=sla_h),
+            sla_deadline=base_time + timedelta(hours=sla_h * 10),
         )
 
     nodes = {"DEPOT": RoadNode("DEPOT", depot_loc)}
@@ -62,20 +66,20 @@ def build_sample_state(base_time: datetime = datetime(2026, 6, 4, 6, 0)) -> Worl
     # connect depot to all
     for cid in cids:
         km = dist(depot_loc, customers[cid].location)
-        edge_list.append(("DEPOT", cid, km, km * 60 / 25))
+        edge_list.append(("DEPOT", cid, km, km * 60 / urban_speed_kmh))
     
     # connect a ring + cross edges
     rng = random.Random(42)
     for i in range(len(cids)):
         c1, c2 = cids[i], cids[(i+1) % len(cids)]
         km = dist(customers[c1].location, customers[c2].location)
-        edge_list.append((c1, c2, km, km * 60 / 25))
+        edge_list.append((c1, c2, km, km * 60 / urban_speed_kmh))
         
     # generate a super dense network
     for _ in range(80):
         c1, c2 = rng.sample(cids, 2)
         km = dist(customers[c1].location, customers[c2].location)
-        edge_list.append((c1, c2, km, km * 60 / 25))
+        edge_list.append((c1, c2, km, km * 60 / urban_speed_kmh))
 
     edges = {}
     adjacency = {n: [] for n in nodes}
@@ -123,7 +127,7 @@ def build_real_state(graph, customers: Optional[List[tuple]] = None,
         vehicles[vid] = Vehicle(
             id=vid, capacity_kg=500, pos=depot_loc, current_load_kg=0,
             status=VehicleStatus.AT_DEPOT,
-            shift_start=base_time, shift_end=base_time + timedelta(hours=10),
+            shift_start=base_time, shift_end=base_time + timedelta(hours=48),
             veh_type="truck", wade_capability=0.3,
         )
 
@@ -136,9 +140,9 @@ def build_real_state(graph, customers: Optional[List[tuple]] = None,
             location=Location(lat, lng, name, name),
             orders=orders,
             time_window=TimeWindow(base_time + timedelta(hours=tw_s),
-                                   base_time + timedelta(hours=tw_e)),
+                                   base_time + timedelta(hours=tw_e * 10)),
             priority=prio,
-            sla_deadline=base_time + timedelta(hours=sla_h),
+            sla_deadline=base_time + timedelta(hours=sla_h * 10),
         )
 
     nodes = {"DEPOT": RoadNode("DEPOT", depot_loc)}
