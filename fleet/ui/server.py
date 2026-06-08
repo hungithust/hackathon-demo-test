@@ -24,6 +24,7 @@ from pydantic import BaseModel
 from fleet.ui.controller import SimulationController
 from fleet.intake.controller import IntakeController
 from fleet.factory import build_transcriber
+from config import settings_schema
 
 _WEB = Path(__file__).resolve().parent / "web"
 
@@ -31,6 +32,13 @@ app = FastAPI(title="FleetOps Control Room")
 
 # Single shared session (rebuilt by /api/reset).
 _ctrl = SimulationController()
+
+# Settings overrides applied via the UI ({} == all defaults from os.environ).
+_overrides: dict = {}
+
+
+def _build_settings():
+    return settings_schema.apply(_overrides)
 
 
 def _controller() -> SimulationController:
@@ -97,6 +105,10 @@ class ReportBody(BaseModel):
     text: str = ""
 
 
+class SettingsBody(BaseModel):
+    values: dict = {}
+
+
 @app.get("/api/snapshot")
 def get_snapshot():
     return _controller().snapshot()
@@ -144,10 +156,39 @@ def post_report(body: ReportBody):
     }
 
 
+@app.get("/api/settings")
+def get_settings():
+    groups = []
+    for s in settings_schema.build_specs():
+        g = next((x for x in groups if x["name"] == s.group), None)
+        if g is None:
+            g = {"name": s.group, "fields": []}
+            groups.append(g)
+        g["fields"].append({
+            "key": s.key, "label": s.label, "type": s.type,
+            "choices": list(s.choices), "step": s.step,
+            "advanced": s.advanced, "help": s.help,
+        })
+    return {"groups": groups, "values": settings_schema.current_values(_build_settings())}
+
+
+@app.post("/api/settings")
+def post_settings(body: SettingsBody):
+    global _ctrl, _overrides
+    merged = {**_overrides, **body.values}
+    try:
+        new_settings = settings_schema.apply(merged)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    _overrides = merged
+    _ctrl = SimulationController(settings=new_settings)
+    return _ctrl.snapshot()
+
+
 @app.post("/api/reset")
 def post_reset():
     global _ctrl
-    _ctrl = SimulationController()
+    _ctrl = SimulationController(settings=_build_settings())
     return _ctrl.snapshot()
 
 
