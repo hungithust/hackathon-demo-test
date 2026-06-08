@@ -46,7 +46,11 @@ async function jpost(url, body) {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
-  if (!r.ok) throw new Error(url + " -> " + r.status);
+  if (!r.ok) {
+    let detail = "HTTP " + r.status;
+    try { const j = await r.json(); if (j && j.detail) detail = j.detail; } catch (e) {}
+    throw new Error(detail);
+  }
   return r.json();
 }
 
@@ -61,6 +65,8 @@ const Api = {
     return { raw: res.raw, reports: res.reports, decisions: res.decisions,
              state: normalize(res.snapshot) };
   },
+  getSettings:  async () => jget("/api/settings"),
+  saveSettings: async (values) => normalize(await jpost("/api/settings", { values })),
 };
 
 function pendingOrders(state) { return state.pending_orders; }
