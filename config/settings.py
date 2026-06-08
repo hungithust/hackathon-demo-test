@@ -21,6 +21,9 @@ class Settings:
     demand_noise: float = 0.3                        # M2: demand multiplicative noise (±)
     restock_interval_min: int = 240                  # M2: depot restock cadence (sim minutes)
     solver_time_limit_sec: int = 0                   # M3: >0 enables OR-Tools GLS (else deterministic)
+    solver_first_solution: str = "path_cheapest_arc"  # M3: OR-Tools first-solution strategy (path_cheapest_arc | savings | parallel_cheapest_insertion | christofides | automatic)
+    solver_metaheuristic: str = ""    # M3: OR-Tools local-search metaheuristic ("" = off/first-solution only | guided_local_search | tabu_search | simulated_annealing | greedy_descent)
+    solver_solution_limit: int = 0    # M3: deterministic stop after N improved solutions (0 = fall back to time limit); machine-independent, unlike solver_time_limit_sec
     ewma_alpha: float = 0.3                # M6: EWMA smoothing factor (0,1]
     zscore_threshold: float = 2.0          # M6: demand-anomaly z-score cutoff
     traffic_alert_factor: float = 3.0      # M6: traffic_factor at/above this -> TRAFFIC event
@@ -82,6 +85,9 @@ def load_settings(env: Optional[Mapping[str, str]] = None) -> Settings:
         demand_noise=float(e.get("DEMAND_NOISE", "0.3")),
         restock_interval_min=int(e.get("RESTOCK_INTERVAL_MIN", "240")),
         solver_time_limit_sec=int(e.get("SOLVER_TIME_LIMIT_SEC", "0")),
+        solver_first_solution=e.get("SOLVER_FIRST_SOLUTION", "path_cheapest_arc"),
+        solver_metaheuristic=e.get("SOLVER_METAHEURISTIC", ""),
+        solver_solution_limit=int(e.get("SOLVER_SOLUTION_LIMIT", "0")),
         ewma_alpha=float(e.get("EWMA_ALPHA", "0.3")),
         zscore_threshold=float(e.get("ZSCORE_THRESHOLD", "2.0")),
         traffic_alert_factor=float(e.get("TRAFFIC_ALERT_FACTOR", "3")),
