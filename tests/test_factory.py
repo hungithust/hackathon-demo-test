@@ -124,3 +124,19 @@ def test_factory_nim_without_endpoint_falls_back_to_rule():
     from config.settings import load_settings
     s = load_settings({"DECISION_ENGINE": "nim"})   # engine requested, no endpoint
     assert isinstance(build_components(s).decision_engine, RuleBasedEngine)
+
+
+def test_build_transcriber_defaults_to_null():
+    from config.settings import load_settings
+    from fleet.factory import build_transcriber
+    from fleet.intake.asr import NullTranscriber
+    t = build_transcriber(load_settings({}))
+    assert isinstance(t, NullTranscriber)
+
+
+def test_build_transcriber_selects_whisper():
+    from config.settings import load_settings
+    from fleet.factory import build_transcriber
+    from fleet.intake.asr import WhisperTranscriber
+    t = build_transcriber(load_settings({"ASR_ENGINE": "whisper"}))
+    assert isinstance(t, WhisperTranscriber)

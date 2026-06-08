@@ -53,6 +53,10 @@ class Settings:
     oracle_min_gap: float = 1.0           # M-B(SBv2): min best/worst realized-cost gap to keep an example (else no signal)
     nim_endpoint: str = ""                # M-C(SBv2): OpenAI-compatible NIM endpoint (empty -> NimAgent disabled)
     nim_model: str = "nvidia/llama-3.1-nemotron-nano-8b-v1"  # M-C(SBv2): served NIM model id
+    asr_engine: str = "none"          # intake: none | whisper | riva
+    riva_endpoint: str = ""           # intake: Riva ASR NIM endpoint
+    whisper_model: str = "large-v3"   # intake: faster-whisper model id
+    intake_extractor: str = "nim"     # intake: nim | claude (extractor transport)
 
 
 def load_settings(env: Optional[Mapping[str, str]] = None) -> Settings:
@@ -106,4 +110,8 @@ def load_settings(env: Optional[Mapping[str, str]] = None) -> Settings:
         oracle_min_gap=float(e.get("ORACLE_MIN_GAP", "1.0")),
         nim_endpoint=e.get("NIM_ENDPOINT", ""),
         nim_model=e.get("NIM_MODEL", "nvidia/llama-3.1-nemotron-nano-8b-v1"),
+        asr_engine=e.get("ASR_ENGINE", "none"),
+        riva_endpoint=e.get("RIVA_ENDPOINT", ""),
+        whisper_model=e.get("WHISPER_MODEL", "large-v3"),
+        intake_extractor=e.get("INTAKE_EXTRACTOR", "nim"),
     )
