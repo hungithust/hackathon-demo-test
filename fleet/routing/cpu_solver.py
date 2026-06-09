@@ -69,7 +69,10 @@ class CpuSolver:
         horizon = max([mins(f.shift_end) for f in problem.fleet]
                       + [mins(t.tw_end) for t in problem.tasks]) + 1
 
-        manager = pywrapcp.RoutingIndexManager(n, num_vehicles, depot)
+        loc_index = {loc: i for i, loc in enumerate(problem.locations)}
+        starts = [loc_index.get(f.start_node, depot) for f in problem.fleet]
+        ends = [depot] * num_vehicles
+        manager = pywrapcp.RoutingIndexManager(n, num_vehicles, starts, ends)
         routing = pywrapcp.RoutingModel(manager)
 
         def time_int(value: float) -> int:
@@ -184,7 +187,9 @@ class CpuSolver:
             stops: List[SolvedStop] = []
             for ix in node_indices:
                 node = manager.IndexToNode(ix)
-                if node == depot:
+                # skip the depot and the vehicle's own start node (its current
+                # position this solve) -- neither is new work to schedule.
+                if node == depot or ix == routing.Start(vehicle_id):
                     continue
                 arrival = base + timedelta(
                     minutes=solution.Value(time_dim.CumulVar(ix)))

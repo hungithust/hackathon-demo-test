@@ -104,11 +104,24 @@ def build_routing_problem(state: WorldState,
     """
     pending = [cid for cid in sorted(state.customers)
                if sum(state.customers[cid].orders.values()) > 0]
-    locations = [depot_id] + pending
 
     # broken / in-maintenance vehicles can't take new work -> excluded from the solve.
     available = [v for v in state.vehicles.values()
                  if v.status not in (VehicleStatus.BROKEN, VehicleStatus.MAINTENANCE)]
+
+    def _current_node(v) -> str:
+        r = state.plan.get(v.id)
+        if not r or not r.stops:
+            return depot_id
+        visited = [st for st in r.stops if st.actual_arrival is not None]
+        if not visited:
+            return depot_id
+        return max(visited, key=lambda st: st.sequence).customer_id
+
+    starts = {v.id: _current_node(v) for v in available}
+    extra = [n for n in dict.fromkeys(starts.values())
+             if n != depot_id and n not in pending]
+    locations = [depot_id] + extra + pending
 
     by_type: Dict[str, list] = {}
     for v in available:
@@ -124,6 +137,7 @@ def build_routing_problem(state: WorldState,
             id=v.id, capacity_kg=v.capacity_kg, veh_type=v.veh_type,
             shift_start=v.shift_start or state.depot.opening_time,
             shift_end=v.shift_end or state.depot.closing_time,
+            start_node=starts[v.id],
         )
         for v in available
     ]

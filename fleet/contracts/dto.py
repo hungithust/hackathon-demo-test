@@ -15,7 +15,8 @@ class FleetVehicleSpec:
     veh_type: str               # selects which time_matrix to use
     shift_start: datetime
     shift_end: datetime
-    # route always starts and ends at the depot (implicit, spec §6.9)
+    start_node: str = "DEPOT"   # node the vehicle departs from this solve (current pos)
+    # route always ends at the depot (implicit, spec §6.9)
 
 
 @dataclass

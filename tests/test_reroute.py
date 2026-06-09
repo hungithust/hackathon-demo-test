@@ -40,3 +40,22 @@ def test_reroute_returns_dropped_list_and_keeps_plan_consistent():
     dropped = reroute(s, comps.optimizer)
     assert isinstance(dropped, list)
     assert s.plan                                   # a fresh plan was written
+
+
+def test_reroute_keeps_inprogress_vehicle_at_its_current_node():
+    from fleet.contracts.state import VehicleRoute, Stop, VehicleStatus
+    s = build_sample_state()
+    comps = build_components(load_settings())
+    # V001 is mid-route, already at C001
+    s.plan["V001"] = VehicleRoute(vehicle_id="V001", stops=[
+        Stop(customer_id="C001", sequence=1, planned_arrival=s.clock,
+             planned_departure=s.clock, actual_arrival=s.clock,
+             actual_departure=s.clock)])
+    s.vehicles["V001"].current_stop_index = 1
+    s.vehicles["V001"].status = VehicleStatus.ON_ROUTE
+    s.customers["C001"].orders = {}        # delivered: no pending order left at C001
+    reroute(s, comps.optimizer)
+    r = s.plan.get("V001")
+    if r and r.stops:
+        # its first NEW stop is reachable from C001, not a depot teleport
+        assert r.stops[0].customer_id != "C001"

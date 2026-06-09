@@ -44,3 +44,18 @@ def test_problem_separate_matrix_per_vehicle_type():
     di, ci = p.locations.index("DEPOT"), p.locations.index("C001")
     assert p.time_matrix["truck"][di][ci] == 10.0       # wade 0.3
     assert p.time_matrix["amphibious"][di][ci] == 6.0   # wade 0.6 -> flood shortcut
+
+
+def test_problem_uses_vehicle_current_node_as_start():
+    from fleet.contracts.state import VehicleRoute, Stop
+    s = build_sample_state()
+    # pretend V001 already delivered C001 and is now sitting at C001
+    s.plan["V001"] = VehicleRoute(vehicle_id="V001", stops=[
+        Stop(customer_id="C001", sequence=1, planned_arrival=s.clock,
+             planned_departure=s.clock, actual_arrival=s.clock,
+             actual_departure=s.clock)])
+    s.vehicles["V001"].current_stop_index = 1
+    p = build_routing_problem(s)
+    v1 = next(f for f in p.fleet if f.id == "V001")
+    assert v1.start_node == "C001"
+    assert "C001" in p.locations           # start node is routable in the matrix
