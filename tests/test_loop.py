@@ -129,3 +129,19 @@ def test_loop_reroutes_on_edge_disruption(monkeypatch):
                 and d.approval_status == ApprovalStatus.APPROVED]
     assert reroutes                       # the loop produced + approved a reroute
     assert calls["n"] > 0                 # the loop actually re-solved
+
+
+def test_periodic_replan_reduces_backlog():
+    # Without periodic replanning the fleet plans once, so demand the first plan
+    # didn't cover piles up forever. With a replan cadence the loop keeps
+    # absorbing fresh demand, so the standing backlog is much smaller.
+    def _run(interval):
+        s = build_sample_state()
+        settings = load_settings(env={"TICK_MINUTES": "30",
+                                      "REPLAN_INTERVAL_TICKS": interval,
+                                      "RESTOCK_INTERVAL_MIN": "30"})
+        comps = build_components(settings)
+        run_loop(s, comps, n_ticks=12, settings=settings, logger=_silent)
+        return s.total_orders_pending()
+
+    assert _run("1") < _run("0")

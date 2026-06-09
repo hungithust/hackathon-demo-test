@@ -36,6 +36,7 @@ class Settings:
     regime_duration_min: int = 180        # M-A: regime length (sim minutes)
     enable_weather: bool = False          # M-A2: gate traffic+weather edge mutation
     enable_sudden_events: bool = False    # random traffic/flood injection for a lively demo (own rng)
+    replan_interval_ticks: int = 0        # >0: re-solve every N ticks to absorb new demand (0 = off)
     enable_travel_time: bool = False      # M-F(SBv2): replay movement against the live graph when grading consequential disruptions
     traffic_peak_factor: float = 1.8      # M-A2: rush-hour traffic_factor at peak (< traffic_alert_factor)
     weather_rho: float = 0.8              # M-A2: AR(1) autocorrelation of the rain process
@@ -101,6 +102,7 @@ def load_settings(env: Optional[Mapping[str, str]] = None) -> Settings:
         regime_duration_min=int(e.get("REGIME_DURATION_MIN", "180")),
         enable_weather=e.get("ENABLE_WEATHER", "0") in ("1", "true", "True"),
         enable_sudden_events=e.get("ENABLE_SUDDEN_EVENTS", "0") in ("1", "true", "True"),
+        replan_interval_ticks=int(e.get("REPLAN_INTERVAL_TICKS", "0")),
         enable_travel_time=e.get("ENABLE_TRAVEL_TIME", "0") in ("1", "true", "True"),
         traffic_peak_factor=float(e.get("TRAFFIC_PEAK_FACTOR", "1.8")),
         weather_rho=float(e.get("WEATHER_RHO", "0.8")),

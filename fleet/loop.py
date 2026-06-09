@@ -37,6 +37,10 @@ def run_loop(state: WorldState, components: Components, n_ticks: int,
     for _ in range(n_ticks):
         components.simulator.tick(state)
 
+        interval = int(getattr(settings, "replan_interval_ticks", 0) or 0)
+        if interval > 0 and state.sim_tick % interval == 0 and state.total_orders_pending() > 0:
+            reroute(state, components.optimizer)
+
         _reconcile_detected(state, components.detector.detect(state))
 
         # Decide once per event: skip any active event that already has a decision.
