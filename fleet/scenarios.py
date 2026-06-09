@@ -13,86 +13,74 @@ from fleet.geo.router import route
 from fleet.geo.roster import HCM_CUSTOMERS
 
 
-def build_sample_state(base_time: datetime = datetime(2026, 6, 4, 6, 0), urban_speed_kmh: float = 25.0) -> WorldState:
-    import math
-    import random
-    
+def build_sample_state(base_time: datetime = datetime(2026, 6, 4, 6, 0)) -> WorldState:
+    """1 depot, 3 vehicles, 4 customers in HCM District 1."""
     depot_loc = Location(10.8231, 106.6297, "1 Nguyen Hue, Q.1, HCM", "Kho Chinh HCM")
     depot = Depot(
         location=depot_loc,
-        inventory={"SKU001": 5000, "SKU002": 3000, "SKU003": 4000},
+        inventory={"SKU001": 100, "SKU002": 50, "SKU003": 80},
         opening_time=base_time,
         closing_time=base_time + timedelta(hours=12),
     )
 
     vehicles = {}
-    for i in range(1, 21):
+    for i in range(1, 4):
         vid = f"V{i:03d}"
         vehicles[vid] = Vehicle(
             id=vid, capacity_kg=500, pos=depot_loc, current_load_kg=0,
             status=VehicleStatus.AT_DEPOT,
-            shift_start=base_time, shift_end=base_time + timedelta(hours=48),
+            shift_start=base_time, shift_end=base_time + timedelta(hours=10),
             veh_type="truck", wade_capability=0.3,
         )
 
+    cust_specs = [
+        ("C001", "supermarket", 10.8050, 106.6300, "BigC Q.1",
+         {"SKU001": 10, "SKU002": 5}, 1, 1, 3, 4),
+        ("C002", "market", 10.7748, 106.6987, "Cho Ben Thanh",
+         {"SKU001": 20}, 2, 1.5, 3.5, 5),
+        ("C003", "convenience_store", 10.8150, 106.6150, "MiniMart Le Loi",
+         {"SKU002": 15, "SKU003": 8}, 3, 2, 4, 6),
+        ("C004", "restaurant", 10.8300, 106.6400, "Nha hang A Chau",
+         {"SKU003": 30}, 2, 1.75, 4, 5.5),
+    ]
     customers = {}
-    # Fake multiple depots by naming some customers as "Kho Trung Chuyển" (Hub)
-    for i, (cid, ctype, lat, lng, name, orders, prio, tw_s, tw_e, sla_h) in enumerate(HCM_CUSTOMERS):
-        if i in (2, 7):
-            name = f"Kho Trung Chuyển {i}"
-        # Stretch the coordinates by 3x from the depot center (10.7760, 106.7000)
-        center_lat, center_lng = 10.7760, 106.7000
-        lat_stretched = center_lat + (lat - center_lat) * 3.0
-        lng_stretched = center_lng + (lng - center_lng) * 3.0
+    for cid, ctype, lat, lng, name, orders, prio, tw_s, tw_e, sla_h in cust_specs:
         customers[cid] = CustomerProfile(
             id=cid, type=ctype,
-            location=Location(lat_stretched, lng_stretched, name, name),
+            location=Location(lat, lng, name, name),
             orders=orders,
             time_window=TimeWindow(base_time + timedelta(hours=tw_s),
-                                   base_time + timedelta(hours=tw_e * 10)),
+                                   base_time + timedelta(hours=tw_e)),
             priority=prio,
-            sla_deadline=base_time + timedelta(hours=sla_h * 10),
+            sla_deadline=base_time + timedelta(hours=sla_h),
         )
 
     nodes = {"DEPOT": RoadNode("DEPOT", depot_loc)}
     for cid in customers:
         nodes[cid] = RoadNode(cid, customers[cid].location)
 
-    def dist(l1, l2):
-        return math.hypot(l1.lat - l2.lat, l1.lng - l2.lng) * 111.0
-
-    edge_list = []
-    cids = list(customers.keys())
-    # connect depot to all
-    for cid in cids:
-        km = dist(depot_loc, customers[cid].location)
-        edge_list.append(("DEPOT", cid, km, km * 60 / urban_speed_kmh))
-    
-    # connect a ring + cross edges
-    rng = random.Random(42)
-    for i in range(len(cids)):
-        c1, c2 = cids[i], cids[(i+1) % len(cids)]
-        km = dist(customers[c1].location, customers[c2].location)
-        edge_list.append((c1, c2, km, km * 60 / urban_speed_kmh))
-        
-    # generate a super dense network
-    for _ in range(80):
-        c1, c2 = rng.sample(cids, 2)
-        km = dist(customers[c1].location, customers[c2].location)
-        edge_list.append((c1, c2, km, km * 60 / urban_speed_kmh))
-
+    edge_list = [
+        ("DEPOT", "C001", 2.0, 10.0), ("DEPOT", "C002", 4.0, 15.0),
+        ("DEPOT", "C003", 2.5, 12.0), ("DEPOT", "C004", 3.0, 14.0),
+        ("C001", "C002", 3.0, 12.0), ("C002", "C003", 2.5, 10.0),
+        ("C003", "C004", 2.0, 8.0), ("C004", "DEPOT", 3.5, 15.0),
+    ]
     edges = {}
     adjacency = {n: [] for n in nodes}
 
     def _add_edge(a, b, km, mins, **kw):
         e = RoadEdge(a, b, km, mins, **kw)
-        if e.id not in edges:
-            edges[e.id] = e
-            adjacency[a].append(e.id)
+        edges[e.id] = e
+        adjacency[a].append(e.id)
 
     for a, b, km, mins in edge_list:
         _add_edge(a, b, km, mins)
         _add_edge(b, a, km, mins)
+
+    _add_edge("DEPOT", "C001", 1.2, 6.0, id="DEPOT->C001#2",
+              status=EdgeStatus.FLOODED, flood_level=0.5)
+    _add_edge("C001", "DEPOT", 1.2, 6.0, id="C001->DEPOT#2",
+              status=EdgeStatus.FLOODED, flood_level=0.5)
 
     return WorldState(
         clock=base_time,

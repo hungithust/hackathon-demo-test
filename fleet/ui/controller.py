@@ -50,7 +50,7 @@ class SimulationController:
         elif getattr(self.settings, "world", "sample") == "real":
             self.state = self._load_real_world()
         else:
-            self.state = build_sample_state(urban_speed_kmh=self.settings.urban_speed_kmh)
+            self.state = build_sample_state()
             self.geometry = self._generate_synthetic_geometry(self.state)
         self.components = build_components(self.settings)
 
