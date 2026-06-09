@@ -46,9 +46,9 @@ function DispatchMap({ state, selectedVeh, onSelectVeh, selectedEvent }) {
   };
 
   const onPointerDown = (e) => {
-    e.preventDefault(); 
-    e.currentTarget.setPointerCapture(e.pointerId);
-    drag.current = { x: e.clientX, y: e.clientY }; 
+    e.preventDefault();
+    try { e.currentTarget.setPointerCapture(e.pointerId); } catch (_) {}
+    drag.current = { x: e.clientX, y: e.clientY };
   };
   const onPointerMove = (e) => {
     const r = wrapRef.current.getBoundingClientRect();
@@ -62,7 +62,7 @@ function DispatchMap({ state, selectedVeh, onSelectVeh, selectedEvent }) {
     }
   };
   const onPointerUp = (e) => {
-    e.currentTarget.releasePointerCapture(e.pointerId);
+    try { e.currentTarget.releasePointerCapture(e.pointerId); } catch (_) {}
     drag.current = null;
   };
   const resetView = () => setView({ k: 1, x: 0, y: 0 });
@@ -127,9 +127,11 @@ function DispatchMap({ state, selectedVeh, onSelectVeh, selectedEvent }) {
   };
 
   return (
-    <div className="map-wrap" ref={wrapRef}>
+    <div className="map-wrap" ref={wrapRef}
+         onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp}
+         style={{ cursor: drag.current ? "grabbing" : "grab", touchAction: "none" }}>
       <svg ref={svgRef} className="map-svg" viewBox={`0 0 ${VB_W} ${VB_H}`} preserveAspectRatio="xMidYMid slice"
-           onWheel={onWheel} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp}
+           onWheel={onWheel}
            style={{ cursor: drag.current ? "grabbing" : "grab", touchAction: "none" }}>
         <defs>
           <radialGradient id="depotGlow" cx="50%" cy="50%" r="50%">
