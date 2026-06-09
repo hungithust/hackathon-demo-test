@@ -64,11 +64,13 @@ def to_cuopt_request(problem: RoutingProblem) -> dict:
 
     return {
         "cost_matrix_data": {"data": matrices},
+        "travel_time_matrix_data": {"data": matrices},
         "task_data": {
             "task_locations": task_locations,
             "demand": [demand_row],
             "task_time_windows": tws,
             "service_times": service,
+            "penalties": penalties,
         },
         "fleet_data": {
             "vehicle_locations": veh_locations,

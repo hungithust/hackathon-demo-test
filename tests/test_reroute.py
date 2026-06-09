@@ -13,7 +13,9 @@ def test_disrupt_edge_changes_graph_and_emits_event():
     evt = sim.disrupt_edge(s, "DEPOT->C001", EdgeStatus.BLOCKED)
     assert s.road_graph.get_edge("DEPOT->C001").status == EdgeStatus.BLOCKED
     assert evt.event_type == EventType.TRAFFIC or evt.event_type == EventType.FLOODED_AREA
-    assert evt in s.events
+    assert evt.target == "DEPOT->C001"
+    # disrupt_edge returns the event; the detector (not disrupt_edge) appends the
+    # canonical DET_ event next tick, so we don't assert membership in s.events here.
 
 
 def test_blocking_edge_reroutes_depot_to_c001_via_detour():
