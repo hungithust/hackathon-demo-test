@@ -90,6 +90,9 @@ function SettingsModal({ open, onClose, onApplied }) {
           </>)}
         </div>
         <div className="modal-foot">
+          <span className="muted" style={{ marginRight: "auto", fontSize: "12px" }}>
+            Applying rebuilds the world from scratch (resets the simulation).
+          </span>
           <button className="btn ghost" onClick={onClose} disabled={busy}>Cancel</button>
           <button className="btn primary" onClick={apply} disabled={busy || groups === null}>
             {busy ? "Restarting…" : "Apply & restart"}
