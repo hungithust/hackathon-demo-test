@@ -78,7 +78,7 @@ class SimulationController:
                 for i in range(1, num_pts):
                     progress = i / num_pts
                     # Vibrate around the straight line, amplitude proportional to dist
-                    offset = (rng.random() - 0.5) * 0.8 * dist
+                    offset = (rng.random() - 0.5) * 0.15 * dist
                     # Taper off the offset near the ends
                     taper = math.sin(progress * math.pi)
                     

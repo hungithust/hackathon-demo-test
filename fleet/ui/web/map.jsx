@@ -148,9 +148,18 @@ function DispatchMap({ state, selectedVeh, onSelectVeh, selectedEvent }) {
           {STREETS.map((d, i) => <path key={i} d={d}/>)}
         </g>
 
-        {/* real road network (OSM / synthetic geometry) */}
-        <g stroke="#26344f" strokeWidth="2.2" fill="none" strokeLinecap="round" strokeLinejoin="round">
-          {baseRoads.map((r) => <path key={r.edge_id} d={pathStr(r.path)}/>)}
+        {/* real road network; disrupted edges tinted + hoverable */}
+        <g fill="none" strokeLinecap="round" strokeLinejoin="round">
+          {baseRoads.map((r) => {
+            const ev = state.events.find((e) => e.target === r.edge_id ||
+              e.target.split("#")[0] === r.edge_id.split("#")[0]);
+            const stroke = ev ? SEVERITY[ev.severity].color : "#2b3b59";
+            return <path key={r.edge_id} d={pathStr(r.path)} stroke={stroke}
+              strokeWidth={ev ? 3 : 2.2} opacity={ev ? 0.9 : 0.7}
+              onMouseEnter={() => setTip({ id: r.edge_id, color: stroke,
+                rows: ev ? [["Status", EVENT_TYPES[ev.event_type].label]] : [["Road", "open"]] })}
+              onMouseLeave={() => setTip(null)} style={{ cursor: "pointer" }}/>;
+          })}
         </g>
 
         {/* active vehicle routes, following the real roads */}
