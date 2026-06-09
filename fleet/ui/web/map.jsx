@@ -184,15 +184,21 @@ function DispatchMap({ state, selectedVeh, onSelectVeh, selectedEvent }) {
         {eventMarks.map((e) => {
           const col = SEVERITY[e.severity].color;
           const sel = selectedEvent === e.id;
+          const seg = e.target.includes("->") && routeByEdge[e.target]
+            ? pathStr(routeByEdge[e.target]) : null;
           return (
-            <g key={e.id} transform={`translate(${e.x},${e.y})`}
+            <g key={e.id}
                onMouseEnter={() => setTip({ id: EVENT_TYPES[e.event_type].label, color: col,
                  rows: [["Target", e.target], ["Severity", SEVERITY[e.severity].label]] })}
                onMouseLeave={() => setTip(null)} style={{ cursor: "pointer" }}>
-              <circle r="14" fill={col} opacity={sel ? .28 : .16} className="evt-pulse" style={{ animationDelay: (e.id.length % 5 * .2) + "s" }}/>
-              <circle r="6.5" fill={col} opacity=".9"/>
-              <circle r="6.5" fill="none" stroke="#0a0f1a" strokeWidth="1.4"/>
-              {sel && <circle r="20" fill="none" stroke={col} strokeWidth="1.6" opacity=".7"/>}
+              {seg && <path d={seg} fill="none" stroke={col} strokeWidth="6"
+                       opacity={sel ? 0.85 : 0.55} strokeLinecap="round" className="route-flow"/>}
+              <g transform={`translate(${e.x},${e.y})`}>
+                <circle r="14" fill={col} opacity={sel ? .28 : .16} className="evt-pulse" style={{ animationDelay: (e.id.length % 5 * .2) + "s" }}/>
+                <circle r="6.5" fill={col} opacity=".9"/>
+                <circle r="6.5" fill="none" stroke="#0a0f1a" strokeWidth="1.4"/>
+                {sel && <circle r="20" fill="none" stroke={col} strokeWidth="1.6" opacity=".7"/>}
+              </g>
             </g>
           );
         })}
