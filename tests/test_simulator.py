@@ -64,3 +64,23 @@ def test_live_travel_time_blocks_schedule_driven_delivery():
 
     stop = s.plan["V001"].stops[0]
     assert stop.actual_arrival is None
+
+
+def test_sudden_events_do_not_perturb_demand_stream():
+    from fleet.scenarios import build_sample_state
+    from fleet.simulator.engine import WorldSimulator
+    from config.settings import load_settings
+
+    base = build_sample_state()
+    sim_a = WorldSimulator(load_settings(env={"ENABLE_SUDDEN_EVENTS": "0"}))
+    for _ in range(8):
+        sim_a.tick(base)
+    demand_off = {c.id: dict(c.orders) for c in base.customers.values()}
+
+    base2 = build_sample_state()
+    sim_b = WorldSimulator(load_settings(env={"ENABLE_SUDDEN_EVENTS": "1"}))
+    for _ in range(8):
+        sim_b.tick(base2)
+    demand_on = {c.id: dict(c.orders) for c in base2.customers.values()}
+
+    assert demand_off == demand_on   # injection uses its own rng; demand identical

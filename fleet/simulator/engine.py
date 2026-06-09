@@ -78,6 +78,7 @@ class WorldSimulator:
         self._regime_until: Dict[str, "datetime"] = {}  # M-A: regime end clock
         self._start_clock = None          # M-A: captured on first tick for trend
         self._weather_rng = random.Random(settings.seed + 1)  # M-A2: independent of demand rng
+        self._event_rng = random.Random(settings.seed + 2)  # sudden-event injection, independent of demand
         self._rain = 0.0                                      # M-A2: rain level in [0,1]
         self._flood_prone = None                              # M-A2: lazily-snapshotted edge ids
         self._weather_flooded: set = set()                    # M-A2: edges flooded BY weather
@@ -99,7 +100,8 @@ class WorldSimulator:
             self._generate_demand(state)
             self._maybe_restock(state)
             self._update_shortage_events(state)
-            self._inject_sudden_events(state)
+            if getattr(self.settings, "enable_sudden_events", False):
+                self._inject_sudden_events(state)
         self._advance_vehicles(state)
 
     def _inject_sudden_events(self, state: WorldState) -> None:
@@ -113,12 +115,12 @@ class WorldSimulator:
 
         # Every 2 ticks, 60% chance of sudden disruption
         if state.sim_tick - self._last_accident_tick >= 2:
-            if self.rng.random() < 0.6:
+            if self._event_rng.random() < 0.6:
                 open_edges = [e for e in state.road_graph.edges.values() if e.status == EdgeStatus.OPEN]
                 if open_edges:
-                    edge = self.rng.choice(open_edges)
+                    edge = self._event_rng.choice(open_edges)
                     # Randomly decide between TRAFFIC and FLOODED_AREA
-                    if self.rng.random() < 0.3 and active_flood < 2:
+                    if self._event_rng.random() < 0.3 and active_flood < 2:
                         self.disrupt_edge(state, edge.id, EdgeStatus.FLOODED, flood_level=0.5)
                     elif active_traffic < 3:
                         self.disrupt_edge(state, edge.id, EdgeStatus.BLOCKED, traffic_factor=float("inf"))

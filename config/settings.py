@@ -35,6 +35,7 @@ class Settings:
     regime_factor: float = 2.0            # M-A: demand multiplier while in a regime
     regime_duration_min: int = 180        # M-A: regime length (sim minutes)
     enable_weather: bool = False          # M-A2: gate traffic+weather edge mutation
+    enable_sudden_events: bool = False    # random traffic/flood injection for a lively demo (own rng)
     enable_travel_time: bool = False      # M-F(SBv2): replay movement against the live graph when grading consequential disruptions
     traffic_peak_factor: float = 1.8      # M-A2: rush-hour traffic_factor at peak (< traffic_alert_factor)
     weather_rho: float = 0.8              # M-A2: AR(1) autocorrelation of the rain process
@@ -55,8 +56,8 @@ class Settings:
     oracle_horizon_ticks: int = 12        # M-A(SBv2): ticks to roll a candidate action forward before grading
     consequential_min_horizon_ticks: int = 60  # M-F(SBv2): minimum grading horizon for consequential dataset generation
     oracle_min_gap: float = 1.0           # M-B(SBv2): min best/worst realized-cost gap to keep an example (else no signal)
-    nim_endpoint: str = "http://localhost:8002/v1"                # M-C(SBv2): OpenAI-compatible NIM endpoint (empty -> NimAgent disabled)
-    nim_model: str = "sovereign-brain"  # M-C(SBv2): served NIM model id
+    nim_endpoint: str = ""                # M-C(SBv2): OpenAI-compatible NIM endpoint (empty -> NimAgent disabled)
+    nim_model: str = "nvidia/llama-3.1-nemotron-nano-8b-v1"  # M-C(SBv2): served NIM model id
     asr_engine: str = "none"          # intake: none | whisper | riva
     riva_endpoint: str = ""           # intake: Riva ASR NIM endpoint
     whisper_model: str = "large-v3"   # intake: faster-whisper model id
@@ -99,6 +100,7 @@ def load_settings(env: Optional[Mapping[str, str]] = None) -> Settings:
         regime_factor=float(e.get("REGIME_FACTOR", "2.0")),
         regime_duration_min=int(e.get("REGIME_DURATION_MIN", "180")),
         enable_weather=e.get("ENABLE_WEATHER", "0") in ("1", "true", "True"),
+        enable_sudden_events=e.get("ENABLE_SUDDEN_EVENTS", "0") in ("1", "true", "True"),
         enable_travel_time=e.get("ENABLE_TRAVEL_TIME", "0") in ("1", "true", "True"),
         traffic_peak_factor=float(e.get("TRAFFIC_PEAK_FACTOR", "1.8")),
         weather_rho=float(e.get("WEATHER_RHO", "0.8")),
@@ -120,8 +122,8 @@ def load_settings(env: Optional[Mapping[str, str]] = None) -> Settings:
         consequential_min_horizon_ticks=int(
             e.get("CONSEQUENTIAL_MIN_HORIZON_TICKS", "60")),
         oracle_min_gap=float(e.get("ORACLE_MIN_GAP", "1.0")),
-        nim_endpoint=e.get("NIM_ENDPOINT", "http://localhost:8002/v1"),
-        nim_model=e.get("NIM_MODEL", "sovereign-brain"),
+        nim_endpoint=e.get("NIM_ENDPOINT", ""),
+        nim_model=e.get("NIM_MODEL", "nvidia/llama-3.1-nemotron-nano-8b-v1"),
         asr_engine=e.get("ASR_ENGINE", "none"),
         riva_endpoint=e.get("RIVA_ENDPOINT", ""),
         whisper_model=e.get("WHISPER_MODEL", "large-v3"),
