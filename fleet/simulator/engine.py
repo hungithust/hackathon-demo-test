@@ -114,14 +114,16 @@ class WorldSimulator:
         # Every 2 ticks, 60% chance of sudden disruption
         if state.sim_tick - self._last_accident_tick >= 2:
             if self.rng.random() < 0.6:
-                open_edges = [e for e in state.road_graph.edges.values() if e.status == EdgeStatus.OPEN]
-                if open_edges:
-                    edge = self.rng.choice(open_edges)
-                    # Randomly decide between TRAFFIC and FLOODED_AREA
-                    if self.rng.random() < 0.3 and active_flood < 2:
-                        self.disrupt_edge(state, edge.id, EdgeStatus.FLOODED, flood_level=0.5)
-                    elif active_traffic < 3:
-                        self.disrupt_edge(state, edge.id, EdgeStatus.BLOCKED, traffic_factor=float("inf"))
+                # only inject sudden disruptions when weather/accident gating is enabled
+                if self.settings.enable_weather:
+                    open_edges = [e for e in state.road_graph.edges.values() if e.status == EdgeStatus.OPEN]
+                    if open_edges:
+                        edge = self.rng.choice(open_edges)
+                        # Randomly decide between TRAFFIC and FLOODED_AREA
+                        if self.rng.random() < 0.3 and active_flood < 2:
+                            self.disrupt_edge(state, edge.id, EdgeStatus.FLOODED, flood_level=0.5)
+                        elif active_traffic < 3:
+                            self.disrupt_edge(state, edge.id, EdgeStatus.BLOCKED, traffic_factor=float("inf"))
             self._last_accident_tick = state.sim_tick
 
     def inject_event(self, state: WorldState, event_type: EventType,
@@ -159,8 +161,8 @@ class WorldSimulator:
             severity=severity, started_at=state.clock,
             description=f"{new_status.value} on {edge_id}",
         )
-        # We do NOT append to state.events here. The detector will see the edge status
-        # and create its own DET_ event to avoid duplicates.
+        # Append the event so injected disruptions are visible to detectors/tests
+        state.events.append(evt)
         return evt
 
     def _new_event_id(self) -> str:

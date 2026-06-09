@@ -127,6 +127,14 @@ class SimulationController:
         stops = sorted(vr.stops, key=lambda st: st.sequence)
         return ["DEPOT"] + [st.customer_id for st in stops] + ["DEPOT"]
 
+    def _next_eta(self, v) -> Optional[str]:
+        vr = self.state.plan.get(v.id)
+        if not vr or not vr.stops:
+            return None
+        stops = sorted(vr.stops, key=lambda s: s.sequence)
+        nxt = next((s for s in stops if s.actual_arrival is None), None)
+        return nxt.planned_arrival.isoformat() if nxt else None
+
     def _vehicle_view(self, v) -> Dict:
         route_nodes = self._route_nodes(v.id)
         # next node on the route after the current stop index (clamped)
@@ -137,10 +145,17 @@ class SimulationController:
             "lat": lat, "lng": lng,
             "stop_index": v.current_stop_index,
             "capacity_kg": v.capacity_kg,
+            "current_load_kg": v.current_load_kg,
             "load_pct": self._load_pct(v),
             "route_nodes": route_nodes,
             "route_path": self._route_path(v),       # [[lng,lat]...] along real roads
             "leg_to": route_nodes[nxt] if route_nodes else "DEPOT",
+            "shift_start": v.shift_start.isoformat() if v.shift_start else None,
+            "shift_end": v.shift_end.isoformat() if v.shift_end else None,
+            "next_eta": self._next_eta(v),
+            "remaining_stops": max(0, len(route_nodes) - 1),
+            "veh_type": v.veh_type,
+            "fuel_level": v.fuel_level,
         }
 
     def _load_pct(self, v) -> int:
@@ -191,6 +206,12 @@ class SimulationController:
                 ll = [lng, lat]
                 if not out or out[-1] != ll:
                     out.append(ll)
+        if out:
+            current_pos = self._vehicle_position(v)
+            if current_pos is not None:
+                current_ll = [current_pos[1], current_pos[0]]
+                if out[0] != current_ll:
+                    out.insert(0, current_ll)
         return out
 
     def _vehicle_position(self, v) -> Tuple[float, float]:
@@ -278,7 +299,14 @@ class SimulationController:
             "customers": [
                 {"id": c.id, "lat": c.location.lat, "lng": c.location.lng,
                  "name": c.location.name, "priority": c.priority,
-                 "type": c.type, "orders": sum(c.orders.values())}
+                 "type": c.type,
+                 "orders": [{"sku": sku, "qty": qty} for sku, qty in c.orders.items()],
+                 "total_qty": sum(c.orders.values()),
+                 "time_window": {"start": c.time_window.start.isoformat(),
+                                  "end": c.time_window.end.isoformat()},
+                 "contact_name": c.contact_name,
+                 "contact_phone": c.contact_phone,
+                 "notes": c.notes}
                 for c in s.customers.values()
             ],
             "routes": [

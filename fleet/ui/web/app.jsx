@@ -67,6 +67,8 @@ function App() {
     return res; // { raw, reports, decisions, state }
   };
 
+  const selectedVehicle = state.vehicles.find((v) => v.id === selectedVeh);
+
   return (
     <div className="app">
       <header className="header">
@@ -100,6 +102,8 @@ function App() {
 
         <div className="col">
           <ApprovalQueue state={state} onApprove={onApprove} onReject={onReject} view={queueView} setView={setQueueView}/>
+          <VehicleDetails vehicle={selectedVehicle}/>
+          <CustomerPanel customers={state.customers}/>
           <VoicePanel onReport={onReport} clock={state.clock}/>
         </div>
       </div>

@@ -194,6 +194,18 @@ body{
 
 .tag{font-family:var(--mono);font-size:11px;color:var(--text-2);background:var(--panel-3);border:1px solid var(--border-soft);padding:1px 6px;border-radius:4px;}
 
+.customer-summary{margin-bottom:12px;padding:12px;border-radius:14px;background:linear-gradient(180deg,var(--panel-3),var(--panel));border:1px solid var(--border-soft);}
+.customer-summary:last-child{margin-bottom:0;}
+.customer-summary .cs-top{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px;}
+.customer-summary .cs-top strong{font-size:13px;}
+.customer-summary .cs-meta{display:flex;flex-wrap:wrap;gap:8px;font-size:11px;color:var(--text-2);margin-bottom:10px;}
+.customer-summary .cs-extra{display:flex;flex-direction:column;gap:6px;font-size:12px;color:var(--text-3);}
+.order-grid{display:flex;flex-wrap:wrap;gap:6px;}
+.order-chip{font-size:11px;color:var(--text);background:rgba(77,166,255,.12);border:1px solid rgba(77,166,255,.24);border-radius:999px;padding:5px 8px;}
+.detail-row{display:flex;justify-content:space-between;gap:10px;font-size:12px;color:var(--text-2);margin-bottom:10px;}
+.detail-row span{color:var(--text-3);}
+.detail-row strong{color:var(--text);}
+
 /* ============ EVENT LIST ============ */
 .event-row{
   display:flex;gap:11px;padding:11px 14px;
@@ -330,6 +342,9 @@ body{
 .map-tip{position:absolute;background:rgba(8,11,18,.95);border:1px solid var(--border-strong);border-radius:8px;padding:8px 11px;font-size:12px;pointer-events:none;box-shadow:var(--shadow);z-index:5;min-width:130px;}
 .map-tip .tt-id{font-family:var(--mono);font-weight:600;margin-bottom:2px;}
 .map-tip .tt-row{font-size:11px;color:var(--text-2);display:flex;justify-content:space-between;gap:14px;}
+.event-seg{cursor:pointer;}
+.route-flow:hover{stroke-width:5 !important;stroke-opacity:1 !important;}
+.route-flow{transition:stroke-width .18s ease, stroke-opacity .18s ease;}
 
 /* ============ EMPTY STATES ============ */
 .empty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:34px 20px;text-align:center;color:var(--text-3);height:100%;}

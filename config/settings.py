@@ -120,8 +120,8 @@ def load_settings(env: Optional[Mapping[str, str]] = None) -> Settings:
         consequential_min_horizon_ticks=int(
             e.get("CONSEQUENTIAL_MIN_HORIZON_TICKS", "60")),
         oracle_min_gap=float(e.get("ORACLE_MIN_GAP", "1.0")),
-        nim_endpoint=e.get("NIM_ENDPOINT", "http://localhost:8002/v1"),
-        nim_model=e.get("NIM_MODEL", "sovereign-brain"),
+        nim_endpoint=e.get("NIM_ENDPOINT", ""),
+        nim_model=e.get("NIM_MODEL", "nvidia/llama-3.1-nemotron-nano-8b-v1"),
         asr_engine=e.get("ASR_ENGINE", "none"),
         riva_endpoint=e.get("RIVA_ENDPOINT", ""),
         whisper_model=e.get("WHISPER_MODEL", "large-v3"),

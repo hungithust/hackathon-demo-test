@@ -7,12 +7,14 @@ from typing import Optional
 
 from fleet.contracts.state import WorldState, EventType, EdgeStatus
 
-_EDGE_EVENTS = {EventType.TRAFFIC, EventType.FLOODED_AREA}
+_EDGE_EVENTS = {EventType.TRAFFIC, EventType.FLOODED_AREA, EventType.ROAD_BLOCK, EventType.ACCIDENT}
 
 
 def _norm(s: str) -> str:
     s = unicodedata.normalize("NFKD", s or "")
     s = "".join(c for c in s if not unicodedata.combining(c))
+    # remove punctuation and normalize whitespace to ease token matching
+    s = re.sub(r"[^0-9a-zA-Z]+", " ", s)
     return s.casefold().strip()
 
 
@@ -36,7 +38,14 @@ def _match_customer(hint: str, state: WorldState) -> Optional[str]:
             return cid
     for cid, c in state.customers.items():
         name = _norm(c.location.name)
-        if name and (name in n or n in name):
+        if not name:
+            continue
+        # token overlap heuristic: any common token indicates a match
+        n_tokens = set(re.findall(r"\w+", n))
+        name_tokens = set(re.findall(r"\w+", name))
+        if n_tokens & name_tokens:
+            return cid
+        if name in n or n in name:
             return cid
     return None
 
@@ -56,10 +65,18 @@ def _match_edge(hint: str, state: WorldState, event_type: EventType) -> Optional
     if event_type == EventType.FLOODED_AREA:
         flooded = [e for e in candidates
                    if e.flood_level > 0 or e.status == EdgeStatus.FLOODED]
-        chosen = (flooded or candidates)[0]
-    else:
-        open_first = [e for e in candidates if e.status == EdgeStatus.OPEN]
-        chosen = (open_first or candidates)[0]
+        if flooded:
+            return flooded[0].id
+    if event_type in (EventType.ROAD_BLOCK, EventType.ACCIDENT):
+        blocked = [e for e in candidates if e.status == EdgeStatus.BLOCKED]
+        if blocked:
+            return blocked[0].id
+    if event_type == EventType.TRAFFIC:
+        congested = sorted(candidates, key=lambda e: (e.traffic_factor, e.status != EdgeStatus.OPEN), reverse=True)
+        if congested:
+            return congested[0].id
+    open_first = [e for e in candidates if e.status == EdgeStatus.OPEN]
+    chosen = (open_first or candidates)[0]
     return chosen.id
 
 

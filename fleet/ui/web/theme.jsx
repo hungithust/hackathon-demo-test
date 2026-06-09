@@ -9,6 +9,8 @@ const SEVERITY = {
 
 const EVENT_TYPES = {
   traffic:            { label: "Traffic Jam",        icon: "traffic",   noun: "edge",     blurb: "Congestion on a road segment" },
+  road_block:         { label: "Road Block",         icon: "roadblock", noun: "edge",     blurb: "Road segment blocked for all vehicles" },
+  accident:           { label: "Accident",          icon: "accident",  noun: "edge",     blurb: "Crash or incident affecting highway flow" },
   demand_surge:       { label: "Demand Surge",       icon: "surge",     noun: "customer", blurb: "Spike in orders at a customer" },
   inventory_shortage: { label: "Inventory Shortage", icon: "inventory", noun: "depot",    blurb: "Stock running low at the depot" },
   vehicle_breakdown:  { label: "Vehicle Breakdown",  icon: "breakdown", noun: "vehicle",  blurb: "Vehicle out of service" },

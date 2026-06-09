@@ -37,12 +37,16 @@ class RuleDetector:
     def _edge_event(self, edge, state):
         if edge.status == EdgeStatus.BLOCKED:
             return Event(
-                id=f"DET_BLOCK_{edge.id}", event_type=EventType.TRAFFIC,
+                id=f"DET_BLOCK_{edge.id}", event_type=EventType.ROAD_BLOCK,
                 target=edge.id, severity=EventSeverity.CRITICAL,
                 started_at=state.clock, description=f"edge {edge.id} blocked")
         if edge.status == EdgeStatus.FLOODED:
-            sev = (EventSeverity.HIGH if edge.flood_level >= _FLOOD_HIGH_DEPTH
-                   else EventSeverity.MEDIUM)
+            if edge.flood_level >= _FLOOD_HIGH_DEPTH:
+                sev = EventSeverity.HIGH
+            elif edge.flood_level >= _FLOOD_HIGH_DEPTH / 2:
+                sev = EventSeverity.MEDIUM
+            else:
+                sev = EventSeverity.LOW
             return Event(
                 id=f"DET_FLOOD_{edge.id}", event_type=EventType.FLOODED_AREA,
                 target=edge.id, severity=sev, started_at=state.clock,
@@ -56,5 +60,12 @@ class RuleDetector:
                 id=f"DET_TRAFFIC_{edge.id}", event_type=EventType.TRAFFIC,
                 target=edge.id, severity=sev, started_at=state.clock,
                 description=f"edge {edge.id} congested (x{edge.traffic_factor})",
+                metrics={"traffic_factor": float(edge.traffic_factor)})
+        if edge.traffic_factor >= self.alert_factor / 2:
+            return Event(
+                id=f"DET_TRAFFIC_LOW_{edge.id}", event_type=EventType.TRAFFIC,
+                target=edge.id, severity=EventSeverity.LOW,
+                started_at=state.clock,
+                description=f"edge {edge.id} lightly congested (x{edge.traffic_factor})",
                 metrics={"traffic_factor": float(edge.traffic_factor)})
         return None

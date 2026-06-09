@@ -9,6 +9,8 @@ function Icon({ name, size = 18, sw = 1.7 }) {
   const paths = {
     // ---- event types ----
     traffic: <><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M5 8h14M5 13h14"/><circle cx="9" cy="17.5" r=".6" fill="currentColor"/><circle cx="15" cy="17.5" r=".6" fill="currentColor"/></>,
+    roadblock: <><rect x="5" y="8" width="14" height="8" rx="2"/><path d="M7 8v8M17 8v8"/><path d="M5 8l4 4-4 4M19 8l-4 4 4 4"/></>,
+    accident: <><path d="M5 10h14"/><path d="M10 5l4 4-4 4"/><path d="M5 19h14"/><circle cx="12" cy="12" r="2"/></>,
     surge: <><path d="M3 17l6-6 4 4 7-8"/><path d="M21 11V7h-4"/></>,
     inventory: <><path d="M3 8l9-5 9 5v9l-9 5-9-5V8z"/><path d="M3 8l9 5 9-5M12 13v9"/><path d="M8 5.5v4"/></>,
     breakdown: <><path d="M3 7h11v8H3zM14 10h4l3 3v2h-7"/><circle cx="6.5" cy="17" r="1.6"/><circle cx="17.5" cy="17" r="1.6"/><path d="M19 4l-2 3h3l-2 3"/></>,

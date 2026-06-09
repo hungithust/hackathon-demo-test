@@ -100,6 +100,23 @@ function DispatchMap({ state, selectedVeh, onSelectVeh, selectedEvent }) {
     baseRoads.push(r);
   });
 
+  const eventSegments = state.events.map((e) => {
+    if (!e.target.includes("->")) {
+      return null;
+    }
+    const path = routeByEdge[e.target];
+    if (!path || path.length < 2) {
+      return null;
+    }
+    const mid = path[Math.floor(path.length / 2)];
+    return {
+      ...e,
+      path,
+      pathStr: pathStr(path),
+      marker: project(mid[1], mid[0]),
+    };
+  }).filter(Boolean);
+
   // event marker positions: edge events ride the real road geometry's midpoint
   const eventMarks = state.events.map((e) => {
     let pt = null;
@@ -163,9 +180,26 @@ function DispatchMap({ state, selectedVeh, onSelectVeh, selectedEvent }) {
           const broken = v.status === "broken";
           return (
             <path key={"r" + v.id} d={path} fill="none"
-              stroke={broken ? "rgba(255,77,94,.5)" : (on ? "#7ec0ff" : "rgba(77,166,255,.45)")}
-              strokeWidth={on ? 3.4 : 2.2} strokeDasharray="2 9" strokeLinecap="round"
-              className="route-flow" style={{ opacity: on ? 1 : .8 }}/>
+              stroke={broken ? "rgba(255,77,94,.55)" : (on ? "#7ec0ff" : "rgba(77,166,255,.4)")}
+              strokeWidth={on ? 4.2 : 3.0} strokeDasharray={on ? "" : "4 10"} strokeLinecap="round"
+              className="route-flow" style={{ opacity: on ? 1 : .7 }}/>
+          );
+        })}
+
+        {/* event path overlays */}
+        {eventSegments.map((e) => {
+          const col = SEVERITY[e.severity].color;
+          const sel = selectedEvent === e.id;
+          return (
+            <g key={"seg" + e.id}> 
+              <path d={e.pathStr} fill="none" stroke={col} strokeWidth={sel ? 6 : 4}
+                strokeOpacity={sel ? .32 : .22} strokeLinecap="round" strokeLinejoin="round"
+                className="event-seg" onMouseEnter={() => setTip({ id: EVENT_TYPES[e.event_type].label, color: col,
+                  rows: [["Target", e.target], ["Severity", SEVERITY[e.severity].label]] })}
+                onMouseLeave={() => setTip(null)}/>
+              <path d={e.pathStr} fill="none" stroke={col} strokeWidth="2" strokeDasharray="8 6" opacity=".9"/>
+              <circle cx={e.marker.x} cy={e.marker.y} r={sel ? 6 : 4} fill={col} opacity=".95"/>
+            </g>
           );
         })}
 
@@ -190,10 +224,17 @@ function DispatchMap({ state, selectedVeh, onSelectVeh, selectedEvent }) {
         {state.customers.map((c) => {
           const pr = PRIORITY[c.priority] || PRIORITY[4];
           const p = PNODES[c.id];
+          const orderSummary = c.orders && c.orders.length
+            ? c.orders.map((o) => `${o.sku}:${o.qty}`).join(", ")
+            : "None";
+          const windowLabel = c.time_window
+            ? `${fmtClock(c.time_window.start)}–${fmtClock(c.time_window.end)}`
+            : "—";
           return (
             <g key={c.id} transform={`translate(${p.x},${p.y})`}
                onMouseEnter={() => setTip({ id: c.id + " · " + c.name, color: pr.color,
-                 rows: [["Type", c.type], ["Priority", pr.label], ["Open orders", c.orders]] })}
+                 rows: [["Type", c.type], ["Priority", pr.label], ["Open orders", c.total_qty],
+                        ["Orders", orderSummary], ["Window", windowLabel]] })}
                onMouseLeave={() => setTip(null)} style={{ cursor: "pointer" }}>
               <circle r={pr.r + 4} fill={pr.color} opacity=".14"/>
               <circle r={pr.r} fill={pr.color} stroke="#0a0f1a" strokeWidth="1.5"/>

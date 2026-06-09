@@ -32,6 +32,8 @@ class EdgeStatus(str, Enum):
 
 class EventType(str, Enum):
     TRAFFIC = "traffic"
+    ROAD_BLOCK = "road_block"
+    ACCIDENT = "accident"
     DEMAND_SURGE = "demand_surge"
     INVENTORY_SHORTAGE = "inventory_shortage"
     VEHICLE_BREAKDOWN = "vehicle_breakdown"

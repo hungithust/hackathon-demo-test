@@ -31,6 +31,8 @@ _ACTION_EFFECT = {
 
 _CANDIDATES = {
     EventType.TRAFFIC:            [DecisionAction.REROUTE, DecisionAction.RESCHEDULE, DecisionAction.DEFER],
+    EventType.ROAD_BLOCK:         [DecisionAction.REROUTE, DecisionAction.RESCHEDULE, DecisionAction.DEFER],
+    EventType.ACCIDENT:           [DecisionAction.REROUTE, DecisionAction.RESCHEDULE, DecisionAction.DEFER],
     EventType.FLOODED_AREA:       [DecisionAction.REROUTE, DecisionAction.RESCHEDULE, DecisionAction.DEFER],
     EventType.DEMAND_SURGE:       [DecisionAction.REPRIORITIZE, DecisionAction.ACCELERATE, DecisionAction.REALLOCATE],
     EventType.URGENT_ORDER:       [DecisionAction.REPRIORITIZE, DecisionAction.ACCELERATE, DecisionAction.REALLOCATE],
@@ -40,6 +42,8 @@ _CANDIDATES = {
 
 _RESOLVES = {
     EventType.TRAFFIC:            {DecisionAction.REROUTE, DecisionAction.RESCHEDULE},
+    EventType.ROAD_BLOCK:         {DecisionAction.REROUTE, DecisionAction.RESCHEDULE},
+    EventType.ACCIDENT:           {DecisionAction.REROUTE, DecisionAction.RESCHEDULE},
     EventType.FLOODED_AREA:       {DecisionAction.REROUTE, DecisionAction.RESCHEDULE},
     EventType.DEMAND_SURGE:       {DecisionAction.REPRIORITIZE, DecisionAction.ACCELERATE, DecisionAction.REALLOCATE},
     EventType.URGENT_ORDER:       {DecisionAction.REPRIORITIZE, DecisionAction.ACCELERATE, DecisionAction.REALLOCATE},

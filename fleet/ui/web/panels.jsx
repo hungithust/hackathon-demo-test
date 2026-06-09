@@ -213,6 +213,89 @@ function FleetStrip({ state, selectedVeh, onSelectVeh }) {
   );
 }
 
+function VehicleDetails({ vehicle }) {
+  if (!vehicle) {
+    return (
+      <div className="panel">
+        <div className="panel-head">
+          <Icon name="truck" size={15} style={{ color: "var(--text-2)" }}/>
+          <h2>Vehicle Details</h2>
+        </div>
+        <div className="panel-body">
+          <div className="empty">
+            <div className="e-sub">Select a vehicle on the fleet strip to inspect its load, route, and status.</div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+  const st = VEHICLE_STATUS[vehicle.status] || { label: vehicle.status, color: "#8A93A6" };
+  const shiftLabel = vehicle.shift_start && vehicle.shift_end
+    ? `${fmtClock(vehicle.shift_start)}–${fmtClock(vehicle.shift_end)}`
+    : vehicle.shift_start ? `From ${fmtClock(vehicle.shift_start)}` : "—";
+  return (
+    <div className="panel">
+      <div className="panel-head">
+        <Icon name="truck" size={15} style={{ color: st.color }}/>
+        <h2>Vehicle {vehicle.id}</h2>
+        <span className="count">{st.label}</span>
+      </div>
+      <div className="panel-body pad">
+        <div className="detail-row"><span>Load</span><strong>{vehicle.load_pct}%</strong></div>
+        <div className="detail-row"><span>Carried</span><strong>{vehicle.current_load_kg ?? "—"} kg</strong></div>
+        <div className="detail-row"><span>Capacity</span><strong>{vehicle.capacity_kg} kg</strong></div>
+        <div className="detail-row"><span>Shift</span><strong>{shiftLabel}</strong></div>
+        <div className="detail-row"><span>Next ETA</span><strong>{vehicle.next_eta ? fmtClock(vehicle.next_eta) : "—"}</strong></div>
+        <div className="detail-row"><span>Next target</span><strong>{vehicle.leg_to}</strong></div>
+        <div className="detail-row"><span>Stops left</span><strong>{vehicle.remaining_stops}</strong></div>
+        {vehicle.route_nodes && vehicle.route_nodes.length > 0 && (
+          <div className="detail-row"><span>Route</span><strong>{vehicle.route_nodes.join(" → ")}</strong></div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function CustomerPanel({ customers }) {
+  return (
+    <div className="panel">
+      <div className="panel-head">
+        <Icon name="users" size={15} style={{ color: "var(--text-2)" }}/>
+        <h2>Customer Orders</h2>
+        <span className="count">{customers.length}</span>
+      </div>
+      <div className="panel-body pad" style={{ overflowY: "auto", maxHeight: 320 }}>
+        {customers.map((c) => {
+          const orders = c.orders || [];
+          const windowLabel = c.time_window ? `${fmtClock(c.time_window.start)}–${fmtClock(c.time_window.end)}` : "—";
+          return (
+            <div key={c.id} className="customer-summary">
+              <div className="cs-top">
+                <strong>{c.id}</strong> <span>{c.name}</span>
+              </div>
+              <div className="cs-meta">
+                <span>{c.type}</span>
+                <span>{PRIORITY[c.priority]?.label || "P4"}</span>
+                <span>{c.total_qty || 0} items</span>
+              </div>
+              <div className="cs-extra">
+                <div>Window: {windowLabel}</div>
+                <div>Contact: {c.contact_name || "—"} · {c.contact_phone || "—"}</div>
+                <div className="order-grid">
+                  {orders.length ? orders.map((o) => (
+                    <div key={o.sku} className="order-chip">{o.sku} × {o.qty}</div>
+                  )) : <span>Orders: None</span>}
+                </div>
+                {c.notes && <div>Notes: {c.notes}</div>}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 // ---------------- VOICE / FIELD REPORT ----------------
 function VoicePanel({ onReport, clock }) {
   const [text, setText] = React.useState("");
@@ -247,7 +330,7 @@ function VoicePanel({ onReport, clock }) {
     <div className="panel" style={{ flexShrink: 0 }}>
       <div className="panel-head">
         <Icon name="mic" size={15} style={{ color: "var(--accent)" }}/>
-        <h2>Field Report</h2>
+        <h2>Field Report / Manual Event</h2>
         <span className="count">voice · text</span>
       </div>
       <div className="voice">
