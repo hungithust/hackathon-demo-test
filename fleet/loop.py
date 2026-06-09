@@ -10,7 +10,8 @@ from fleet.contracts.state import WorldState, ApprovalStatus, EventType
 from fleet.factory import Components
 from fleet.dispatch.approval import should_auto_approve
 from fleet.dispatch.dispatcher import RESOLVE_ACTIONS
-from fleet.routing.planner import plan_routes, reroute, plan_total_minutes
+from fleet.routing.planner import (
+    plan_routes, reroute, route_minutes_by_vehicle, reroute_delay_minutes)
 
 
 def _reconcile_detected(state: WorldState, detected) -> None:
@@ -110,13 +111,13 @@ def run_loop(state: WorldState, components: Components, n_ticks: int,
                    f"{d.action.value} <- {d.event_id} [{verdict}]")
 
         if needs_resolve and state.total_orders_pending() > 0:
-            before = plan_total_minutes(state)
+            before = route_minutes_by_vehicle(state)
             reroute(state, components.optimizer)
-            added = max(0.0, plan_total_minutes(state) - before)
-            # Record the *measured* delay the re-solve caused, replacing the
-            # engine's self-estimate so the UI reflects reality.
+            added = reroute_delay_minutes(before, route_minutes_by_vehicle(state))
+            # Record the *measured* per-vehicle delta the re-solve caused, replacing
+            # the engine's self-estimate so the UI reflects reality.
             for d in resolve_decisions:
-                d.impact_estimate["added_delay_min"] = round(added, 1)
+                d.impact_estimate["added_delay_min"] = added
 
         logger(f"t={state.sim_tick} clock={state.clock} "
                f"active_events={len(state.get_active_events())} "

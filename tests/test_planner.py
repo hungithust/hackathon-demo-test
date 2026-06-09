@@ -32,3 +32,11 @@ def test_plan_routes_only_routes_with_stops():
     plan_routes(s, CpuSolver())
     # every stored route has at least one stop (empty routes are omitted)
     assert all(len(r.stops) >= 1 for r in s.plan.values())
+
+
+def test_reroute_delay_minutes_sums_per_vehicle_change():
+    from fleet.routing.planner import reroute_delay_minutes
+    before = {"V001": 30.0, "V002": 10.0}     # vehicle_id -> planned drive minutes
+    after = {"V001": 45.0, "V002": 10.0, "V003": 5.0}
+    # V001 grew by 15, V003 is new work (+5), V002 unchanged -> +20 total
+    assert reroute_delay_minutes(before, after) == 20.0

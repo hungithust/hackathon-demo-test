@@ -48,6 +48,23 @@ def plan_total_minutes(state: WorldState) -> float:
     return total
 
 
+def route_minutes_by_vehicle(state: WorldState) -> dict:
+    """Planned drive minutes per vehicle in the current plan."""
+    out = {}
+    for vid, r in state.plan.items():
+        if r.start_time is None or r.end_time is None:
+            continue
+        out[vid] = (r.end_time - r.start_time).total_seconds() / 60.0
+    return out
+
+
+def reroute_delay_minutes(before: dict, after: dict) -> float:
+    """Total change in planned drive minutes across the fleet (sum over the union
+    of vehicles). Positive = the reroute added delay; reported as-is (not clamped)."""
+    keys = set(before) | set(after)
+    return round(sum(after.get(k, 0.0) - before.get(k, 0.0) for k in keys), 1)
+
+
 def reroute(state: WorldState, optimizer: RouteOptimizer,
             depot_id: str = "DEPOT") -> List[str]:
     """Re-solve from scratch against the current road graph. Because the time

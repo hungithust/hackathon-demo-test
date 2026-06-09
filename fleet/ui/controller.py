@@ -11,7 +11,7 @@ from fleet.contracts.state import ApprovalStatus, VehicleStatus
 from fleet.scenarios import build_sample_state, build_real_state
 from fleet.factory import build_components
 from fleet.dispatch.dispatcher import RESOLVE_ACTIONS
-from fleet.routing.planner import reroute, plan_total_minutes
+from fleet.routing.planner import reroute, route_minutes_by_vehicle, reroute_delay_minutes
 from fleet.routing.matrix import shortest_times_from, shortest_path_edges
 from config.settings import load_settings
 
@@ -295,10 +295,10 @@ class SimulationController:
         d.approved_at = self.state.clock
         self.components.dispatcher.apply(self.state, d)
         if d.action in RESOLVE_ACTIONS and self.state.total_orders_pending() > 0:
-            before = plan_total_minutes(self.state)
+            before = route_minutes_by_vehicle(self.state)
             reroute(self.state, self.components.optimizer)
-            added = max(0.0, plan_total_minutes(self.state) - before)
-            d.impact_estimate["added_delay_min"] = round(added, 1)
+            d.impact_estimate["added_delay_min"] = reroute_delay_minutes(
+                before, route_minutes_by_vehicle(self.state))
         return d
 
     def reject(self, decision_id: str):
