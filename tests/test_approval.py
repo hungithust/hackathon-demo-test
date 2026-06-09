@@ -30,6 +30,13 @@ def test_defer_and_cancel_and_reallocate_need_approval():
         assert should_auto_approve(_dec(a), EventSeverity.LOW, S) is False
 
 
-def test_critical_severity_always_needs_approval():
+def test_critical_reroute_auto_approves_when_small():
+    # A reroute around a blocked road must apply automatically even at CRITICAL
+    # severity, as long as the added delay is under the threshold.
     assert should_auto_approve(_dec(DecisionAction.REROUTE, 5.0),
+                               EventSeverity.CRITICAL, S) is True
+
+
+def test_critical_reallocate_still_needs_approval():
+    assert should_auto_approve(_dec(DecisionAction.REALLOCATE, 5.0),
                                EventSeverity.CRITICAL, S) is False

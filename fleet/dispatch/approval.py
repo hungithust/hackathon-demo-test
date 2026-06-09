@@ -19,10 +19,8 @@ _AUTO_CANDIDATE_ACTIONS = {
 def should_auto_approve(decision: Decision,
                         severity: Optional[EventSeverity],
                         settings) -> bool:
-    if severity == EventSeverity.CRITICAL:
-        return False
     if decision.action in _NEEDS_APPROVAL_ACTIONS:
-        return False
+        return False                       # DEFER/CANCEL/REALLOCATE always escalate
     if decision.action in _AUTO_CANDIDATE_ACTIONS:
         added = decision.impact_estimate.get("added_delay_min", 0.0)
         return added <= settings.auto_approve_delay_threshold_min
