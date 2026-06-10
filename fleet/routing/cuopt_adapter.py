@@ -57,7 +57,8 @@ def to_cuopt_request(problem: RoutingProblem) -> dict:
 
     veh_locations, cap_row, vtws, veh_types = [], [], [], []
     for f in problem.fleet:
-        veh_locations.append([depot, depot])
+        start_loc_idx = problem.locations.index(f.start_location or problem.depot_id)
+        veh_locations.append([start_loc_idx, depot])
         cap_row.append(int(round(f.capacity_kg)))
         vtws.append([mins(f.shift_start), mins(f.shift_end)])
         veh_types.append(type_keys[f.veh_type])
@@ -95,6 +96,11 @@ def from_cuopt_response(problem: RoutingProblem, response: dict,
         vehicle = problem.fleet[int(v_key)]
         task_ids = vd.get("task_id", [])
         stamps = vd.get("arrival_stamp", [])
+        # Strip start (current location) and end (Depot) elements from the raw response
+        if len(task_ids) >= 2:
+            task_ids = task_ids[1:-1]
+            stamps = stamps[1:-1]
+            
         served = [(tid, st) for tid, st in zip(task_ids, stamps)
                   if tid != "Depot"]
         remaining = sum(int(round(problem.tasks[int(tid)].demand_kg))

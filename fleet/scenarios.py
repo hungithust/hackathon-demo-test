@@ -9,14 +9,24 @@ from fleet.contracts.state import (
     WorldState, Depot, Location, Vehicle, VehicleStatus, CustomerProfile,
     TimeWindow, RoadGraph, RoadNode, RoadEdge, EdgeStatus,
 )
+from fleet.detection.rules import RuleDetector
 from fleet.geo.router import route
 from fleet.geo.roster import HCM_CUSTOMERS
 
 
 def build_sample_state(base_time: datetime = datetime(2026, 6, 4, 6, 0), urban_speed_kmh: float = 25.0) -> WorldState:
+    """10-vehicle / 10-customer demo world with a realistic sparse road network.
+
+    Topology:
+      • 4 junction nodes (J_NW / J_NE / J_SE / J_SW) form a ring road.
+      • DEPOT connects to every junction (main arteries).
+      • Each customer has a direct DEPOT→Ci road AND connections to its 2 nearest
+        junctions, giving real bypass options when the direct road is congested.
+      • Nearby customer pairs (<= 5 km straight-line) get a direct edge.
+    This means a traffic jam on DEPOT→Ci forces routing via junction (visible detour),
+    unlike the old complete graph where every pair was always directly connected.
+    """
     import math
-    import random
-    
     depot_loc = Location(10.8231, 106.6297, "1 Nguyen Hue, Q.1, HCM", "Kho Chinh HCM")
     depot = Depot(
         location=depot_loc,
@@ -25,8 +35,9 @@ def build_sample_state(base_time: datetime = datetime(2026, 6, 4, 6, 0), urban_s
         closing_time=base_time + timedelta(hours=12),
     )
 
+    # 10 vehicles
     vehicles = {}
-    for i in range(1, 21):
+    for i in range(1, 11):
         vid = f"V{i:03d}"
         vehicles[vid] = Vehicle(
             id=vid, capacity_kg=500, pos=depot_loc, current_load_kg=0,
@@ -35,72 +46,104 @@ def build_sample_state(base_time: datetime = datetime(2026, 6, 4, 6, 0), urban_s
             veh_type="truck", wade_capability=0.3,
         )
 
+    # 10 customers — first 10 from HCM roster, coordinates stretched 3× from center
     customers = {}
-    # Fake multiple depots by naming some customers as "Kho Trung Chuyển" (Hub)
-    for i, (cid, ctype, lat, lng, name, orders, prio, tw_s, tw_e, sla_h) in enumerate(HCM_CUSTOMERS):
-        if i in (2, 7):
-            name = f"Kho Trung Chuyển {i}"
-        # Stretch the coordinates by 3x from the depot center (10.7760, 106.7000)
-        center_lat, center_lng = 10.7760, 106.7000
-        lat_stretched = center_lat + (lat - center_lat) * 3.0
-        lng_stretched = center_lng + (lng - center_lng) * 3.0
+    center_lat, center_lng = 10.7760, 106.7000
+    for cid, ctype, lat, lng, name, orders, prio, tw_s, tw_e, sla_h in HCM_CUSTOMERS[:10]:
+        lat_s = center_lat + (lat - center_lat) * 3.0
+        lng_s = center_lng + (lng - center_lng) * 3.0
         customers[cid] = CustomerProfile(
             id=cid, type=ctype,
-            location=Location(lat_stretched, lng_stretched, name, name),
+            location=Location(lat_s, lng_s, name, name),
             orders=orders,
-            time_window=TimeWindow(base_time + timedelta(hours=tw_s),
-                                   base_time + timedelta(hours=tw_e * 10)),
+            time_window=TimeWindow(base_time, base_time + timedelta(hours=tw_e * 10)),
             priority=prio,
             sla_deadline=base_time + timedelta(hours=sla_h * 10),
         )
 
+    # ── Road network nodes ──────────────────────────────────────────────────────
+    # 4 junction nodes act as road intersections (not delivery destinations).
+    # Positioned to form a ring that covers all 4 quadrants around the depot.
+    junction_locs = {
+        "J_NW": Location(10.880, 106.540, "Nút giao Tây Bắc", "Nút giao Tây Bắc"),
+        "J_NE": Location(10.855, 106.650, "Nút giao Đông Bắc", "Nút giao Đông Bắc"),
+        "J_SE": Location(10.775, 106.680, "Nút giao Đông Nam", "Nút giao Đông Nam"),
+        "J_SW": Location(10.780, 106.580, "Nút giao Tây Nam", "Nút giao Tây Nam"),
+    }
+
     nodes = {"DEPOT": RoadNode("DEPOT", depot_loc)}
+    for jid, jloc in junction_locs.items():
+        nodes[jid] = RoadNode(jid, jloc)
     for cid in customers:
         nodes[cid] = RoadNode(cid, customers[cid].location)
 
-    def dist(l1, l2):
-        return math.hypot(l1.lat - l2.lat, l1.lng - l2.lng) * 111.0
+    def straight_km(a: str, b: str) -> float:
+        la, lb = nodes[a].location, nodes[b].location
+        return math.hypot(la.lat - lb.lat, la.lng - lb.lng) * 111.0
 
-    edge_list = []
-    cids = list(customers.keys())
-    # connect depot to all
-    for cid in cids:
-        km = dist(depot_loc, customers[cid].location)
-        edge_list.append(("DEPOT", cid, km, km * 60 / urban_speed_kmh))
-    
-    # connect a ring + cross edges
-    rng = random.Random(42)
-    for i in range(len(cids)):
-        c1, c2 = cids[i], cids[(i+1) % len(cids)]
-        km = dist(customers[c1].location, customers[c2].location)
-        edge_list.append((c1, c2, km, km * 60 / urban_speed_kmh))
-        
-    # generate a super dense network
-    for _ in range(80):
-        c1, c2 = rng.sample(cids, 2)
-        km = dist(customers[c1].location, customers[c2].location)
-        edge_list.append((c1, c2, km, km * 60 / urban_speed_kmh))
+    edges: dict = {}
+    adjacency: dict = {n: [] for n in nodes}
 
-    edges = {}
-    adjacency = {n: [] for n in nodes}
-
-    def _add_edge(a, b, km, mins, **kw):
+    def _add_edge(a: str, b: str, **kw):
+        km = straight_km(a, b)
+        mins = km * 60.0 / urban_speed_kmh
         e = RoadEdge(a, b, km, mins, **kw)
         if e.id not in edges:
             edges[e.id] = e
             adjacency[a].append(e.id)
 
-    for a, b, km, mins in edge_list:
-        _add_edge(a, b, km, mins)
-        _add_edge(b, a, km, mins)
+    def _bidir(a: str, b: str, **kw):
+        _add_edge(a, b, **kw)
+        _add_edge(b, a, **kw)
 
-    return WorldState(
+    # 1. DEPOT ↔ all 4 junctions (main arteries)
+    for jid in junction_locs:
+        _bidir("DEPOT", jid)
+
+    # 2. Ring road connecting adjacent junctions
+    ring = ["J_NW", "J_NE", "J_SE", "J_SW"]
+    for i in range(len(ring)):
+        _bidir(ring[i], ring[(i + 1) % len(ring)])
+
+    # 3. DEPOT ↔ each customer direct (main delivery roads — traffic jam targets)
+    for cid in customers:
+        _bidir("DEPOT", cid)
+
+    # 4. Each customer ↔ its 2 nearest junctions (bypass alternatives)
+    for cid in customers:
+        cloc = customers[cid].location
+        by_dist = sorted(junction_locs,
+                         key=lambda jid: math.hypot(cloc.lat - junction_locs[jid].lat,
+                                                     cloc.lng - junction_locs[jid].lng))
+        for jid in by_dist[:2]:
+            _bidir(cid, jid)
+
+    # 5. Direct customer↔customer edges for geographically close pairs
+    cids = list(customers.keys())
+    for i in range(len(cids)):
+        for j in range(i + 1, len(cids)):
+            if straight_km(cids[i], cids[j]) <= 5.0:
+                _bidir(cids[i], cids[j])
+
+    # 6. Explicit demo road C001↔C002 (needed for the fixed traffic jam scenario)
+    _bidir("C001", "C002")
+
+    # Initial flood on the C005↔C006 direct edge so there's a visible flood marker
+    # from the start.  Both nodes still reachable via DEPOT direct or junction bypass.
+    for eid in ["C005->C006", "C006->C005"]:
+        if eid in edges:
+            edges[eid].status = EdgeStatus.FLOODED
+            edges[eid].flood_level = 0.5
+
+    state = WorldState(
         clock=base_time,
         depot=depot,
         customers=customers,
         vehicles=vehicles,
         road_graph=RoadGraph(nodes=nodes, edges=edges, adjacency=adjacency),
     )
+    state.events.extend(RuleDetector().detect(state))
+    return state
 
 
 def build_real_state(graph, customers: Optional[List[tuple]] = None,
@@ -125,7 +168,7 @@ def build_real_state(graph, customers: Optional[List[tuple]] = None,
     for i in range(1, 21):
         vid = f"V{i:03d}"
         vehicles[vid] = Vehicle(
-            id=vid, capacity_kg=500, pos=depot_loc, current_load_kg=0,
+            id=vid, capacity_kg=150, pos=depot_loc, current_load_kg=0,
             status=VehicleStatus.AT_DEPOT,
             shift_start=base_time, shift_end=base_time + timedelta(hours=48),
             veh_type="truck", wade_capability=0.3,
@@ -139,7 +182,7 @@ def build_real_state(graph, customers: Optional[List[tuple]] = None,
             id=cid, type=ctype,
             location=Location(lat, lng, name, name),
             orders=orders,
-            time_window=TimeWindow(base_time + timedelta(hours=tw_s),
+            time_window=TimeWindow(base_time, # Start immediately to avoid vehicles waiting at depot
                                    base_time + timedelta(hours=tw_e * 10)),
             priority=prio,
             sla_deadline=base_time + timedelta(hours=sla_h * 10),
@@ -179,11 +222,14 @@ def build_real_state(graph, customers: Optional[List[tuple]] = None,
         la, lo = cust_objs[a].location, cust_objs[b].location
         return _math.hypot(la.lat - lo.lat, la.lng - lo.lng) * 111.0
 
-    k = min(4, len(cids) - 1)
-    for a in cids:
-        nearest = sorted((b for b in cids if b != a),
-                         key=lambda b: _straight_km(a, b))[:k]
-        for b in nearest:
+    # Full pairwise connectivity: route between every customer pair so the routing
+    # matrix has accurate OSM travel times for all (i, j) — not inflated indirect
+    # approximations through intermediate customers.  With only k-nearest edges,
+    # the Dijkstra used to build the cost matrix falls back to longer chain paths
+    # for pairs without a direct edge, giving suboptimal VRP solutions and making
+    # it impossible to find good detours when an edge is flooded/congested.
+    for i, a in enumerate(cids):
+        for b in cids[i + 1:]:
             if f"{a}->{b}" in edges:
                 continue
             ca, cb = cust_objs[a].location, cust_objs[b].location
@@ -211,4 +257,8 @@ def build_real_state(graph, customers: Optional[List[tuple]] = None,
         vehicles=vehicles,
         road_graph=RoadGraph(nodes=nodes, edges=edges, adjacency=adjacency),
     )
+    
+    # Run detector once so static conditions (e.g. flooded edges) appear at tick 0
+    state.events.extend(RuleDetector().detect(state))
+    
     return state, geometry

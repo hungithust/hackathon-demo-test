@@ -7,7 +7,7 @@ flood-prone parallel edge for C001 keeps its meaning."""
 HCM_CUSTOMERS = [
     ("C001", "supermarket",       10.8050, 106.6300, "BigC Mien Dong",
      {"SKU001": 10, "SKU002": 5}, 1, 1, 3, 4),
-    ("C002", "market",            10.7725, 106.6980, "Cho Ben Thanh",
+    ("C002", "market",            10.7765, 106.6870, "Cho Ben Thanh",
      {"SKU001": 20}, 2, 1.5, 3.5, 5),
     ("C003", "convenience_store", 10.8150, 106.6150, "MiniMart Le Loi",
      {"SKU002": 15, "SKU003": 8}, 3, 2, 4, 6),

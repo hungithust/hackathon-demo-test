@@ -193,12 +193,13 @@ class RoadEdge:
 
     @property
     def effective_time(self) -> float:
-        return self.base_time_minutes * self.traffic_factor
+        flood_penalty = 100.0 if self.flood_level > 0.0 else 1.0
+        return self.base_time_minutes * self.traffic_factor * flood_penalty
 
     def is_passable(self, wade_capability: float) -> bool:
-        """Spec §6.5: BLOCKED forbidden for all; otherwise flooded edge is
-        forbidden when its flood_level exceeds the vehicle's wade_capability."""
-        if self.status == EdgeStatus.BLOCKED:
+        """BLOCKED and FLOODED status edges are forbidden for all vehicles.
+        An OPEN edge with partial flood depth is checked against wade_capability."""
+        if self.status in (EdgeStatus.BLOCKED, EdgeStatus.FLOODED):
             return False
         return self.flood_level <= wade_capability
 

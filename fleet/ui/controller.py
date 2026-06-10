@@ -45,6 +45,8 @@ class SimulationController:
     def __init__(self, state=None, settings=None):
         self.settings = settings or load_settings()
         self.geometry = {}
+        # Keyed by vehicle_id; set when a vehicle must return to DEPOT after reroute
+        self._return_context: Dict = {}
         if state is not None:
             self.state = state
         elif getattr(self.settings, "world", "sample") == "real":
@@ -140,6 +142,7 @@ class SimulationController:
             "load_pct": self._load_pct(v),
             "route_nodes": route_nodes,
             "route_path": self._route_path(v),       # [[lng,lat]...] along real roads
+            "return_path": self._return_path(v),     # [[lng,lat]...] dashed return-to-depot leg
             "leg_to": route_nodes[nxt] if route_nodes else "DEPOT",
         }
 
@@ -158,13 +161,12 @@ class SimulationController:
         n = self.state.road_graph.nodes.get(node)
         return (n.location.lat, n.location.lng) if n else None
 
-    def _leg_polyline(self, from_node: str, to_node: str,
-                      wade: float) -> List[Tuple[float, float]]:
-        """Real (lat,lng) polyline a vehicle drives from from_node to to_node,
+    def _leg_polyline(self, u: str, v: str, wade: float, use_base: bool = False) -> List[Tuple[float, float]]:
+        """Real (lat,lng) polyline a vehicle drives from u to v,
         concatenating the shortest-path edge geometries (the leg may pass through
         DEPOT). Falls back to a straight segment when geometry is missing."""
         poly: List[Tuple[float, float]] = []
-        for eid in shortest_path_edges(self.state.road_graph, from_node, to_node, wade):
+        for eid in shortest_path_edges(self.state.road_graph, u, v, wade, use_base=use_base):
             g = self.geometry.get(eid)
             if not g:
                 e = self.state.road_graph.get_edge(eid)
@@ -175,19 +177,76 @@ class SimulationController:
                 if not poly or poly[-1] != t:
                     poly.append(t)
         if not poly:
-            a, b = self._node_latlng(from_node), self._node_latlng(to_node)
-            poly = [a, b] if a and b else []
+            a, b = self._node_latlng(u), self._node_latlng(v)
+            if a and b:
+                return [a, b]
         return poly
 
+    def _truncate_polyline(self, poly: List[Tuple[float, float]], frac: float) -> List[List[float]]:
+        """Return the 0..frac prefix of a (lat,lng) polyline as [[lng,lat]...] for the UI."""
+        if not poly or frac <= 0:
+            return []
+        if frac >= 1:
+            return [[p[1], p[0]] for p in poly]
+        segs = [math.hypot(poly[i+1][0]-poly[i][0], poly[i+1][1]-poly[i][1])
+                for i in range(len(poly)-1)]
+        total = sum(segs)
+        if total <= 0:
+            return [[poly[0][1], poly[0][0]]]
+        target, acc = frac * total, 0.0
+        result = [[poly[0][1], poly[0][0]]]
+        for i, seg in enumerate(segs):
+            if acc + seg >= target:
+                t = (target - acc) / seg if seg > 0 else 0.0
+                lat = poly[i][0] + (poly[i+1][0] - poly[i][0]) * t
+                lng = poly[i][1] + (poly[i+1][1] - poly[i][1]) * t
+                result.append([lng, lat])
+                break
+            acc += seg
+            result.append([poly[i+1][1], poly[i+1][0]])
+        return result
+
+    def _return_path(self, v) -> Optional[List]:
+        """Dashed return path: DEPOT → vehicle's departure position along the original
+        edge. Shown while the vehicle is animating back to DEPOT after a reroute."""
+        ctx = self._return_context.get(v.id)
+        if not ctx:
+            return None
+        elapsed_min = (self.state.clock - ctx['approval_clock']).total_seconds() / 60.0
+        if elapsed_min >= ctx['return_duration_min']:
+            return None
+        wade = float(v.wade_capability)
+        poly = self._leg_polyline(ctx['from_node'], ctx['to_node'], wade, use_base=True)
+        return self._truncate_polyline(poly, ctx['frac_at_approval'])
+
+    def _has_pending_reroute(self, vehicle_id: str) -> bool:
+        """True if there is a pending reroute/reschedule decision that includes
+        this vehicle in its proposed_routes — used to decide which path to render."""
+        from fleet.contracts.state import DecisionAction
+        for d in self.state.get_pending_decisions():
+            if d.action in (DecisionAction.REROUTE, DecisionAction.RESCHEDULE):
+                if d.execution_result:
+                    if vehicle_id in d.execution_result.get("proposed_routes", {}):
+                        return True
+        return False
+
     def _route_path(self, v) -> List[List[float]]:
-        """Whole planned route as one [[lng,lat]...] polyline along real roads."""
+        """Whole planned route as one [[lng,lat]...] polyline along real roads.
+
+        While a reroute decision is pending: use base_time (ignores disruptions)
+        so the blue route stays on its original path through the affected area,
+        contrasting visibly with the green proposed-reroute overlay.
+
+        After approval (no pending decision): switch to effective_time so the
+        blue route follows the newly approved detour around the disruption."""
         route_nodes = self._route_nodes(v.id)
         if len(route_nodes) < 2:
             return []
         wade = float(v.wade_capability)
+        use_base = self._has_pending_reroute(v.id)
         out: List[List[float]] = []
         for a, b in zip(route_nodes[:-1], route_nodes[1:]):
-            for (lat, lng) in self._leg_polyline(a, b, wade):
+            for (lat, lng) in self._leg_polyline(a, b, wade, use_base=use_base):
                 ll = [lng, lat]
                 if not out or out[-1] != ll:
                     out.append(ll)
@@ -202,24 +261,85 @@ class SimulationController:
         vr = self.state.plan.get(v.id)
         if not vr or not vr.stops:
             return default
+
+        # Return-to-DEPOT animation: vehicle was rerouted and must drive back first
+        ctx = self._return_context.get(v.id)
+        if ctx:
+            elapsed_min = (self.state.clock - ctx['approval_clock']).total_seconds() / 60.0
+            if elapsed_min < ctx['return_duration_min']:
+                progress = elapsed_min / max(0.001, ctx['return_duration_min'])
+                cur_frac = ctx['frac_at_approval'] * (1.0 - progress)
+                wade = float(v.wade_capability)
+                pt = _interp_polyline(
+                    self._leg_polyline(ctx['from_node'], ctx['to_node'], wade, use_base=True),
+                    cur_frac)
+                return pt or default
+            else:
+                self._return_context.pop(v.id, None)
+
         stops = sorted(vr.stops, key=lambda s: s.sequence)
         nxt = next((s for s in stops if s.actual_arrival is None), None)
-        if nxt is None:                                  # route done -> engine pos
-            return default
         visited = [s for s in stops if s.actual_arrival is not None]
+        
+        if nxt is None:
+            # Route done (all stops visited). Is it back at depot?
+            if v.pos == self.state.depot.location:
+                return default
+            # It is currently driving back to the depot
+            from_node = visited[-1].customer_id if visited else "DEPOT"
+            to_node = "DEPOT"
+            from_time = visited[-1].actual_departure if visited else self.state.depot.opening_time
+            if from_time is None:
+                # Still doing service at the last customer
+                return default
+            wade = float(v.wade_capability)
+            leg_min = shortest_times_from(self.state.road_graph, from_node, wade).get(to_node)
+            if not leg_min or leg_min <= 0:
+                return default
+            span = leg_min * 60.0
+            frac = max(0.0, min(1.0, (self.state.clock - from_time).total_seconds() / span))
+            pt = _interp_polyline(self._leg_polyline(from_node, to_node, wade, use_base=True), frac)
+            return pt or default
+
+        # Otherwise, en route to `nxt`
         from_node = visited[-1].customer_id if visited else "DEPOT"
         to_node = nxt.customer_id
         wade = float(v.wade_capability)
-        leg_min = shortest_times_from(self.state.road_graph, from_node, wade).get(to_node)
-        if not leg_min or leg_min <= 0:
-            return default
-        from_time = nxt.planned_arrival - timedelta(minutes=leg_min)
-        span = (nxt.planned_arrival - from_time).total_seconds()
-        if span <= 0:
-            return self._node_latlng(to_node) or default
+        # Use effective leg time for span: when a traffic jam raises effective_time
+        # 10× the vehicle visually crawls along the road at 1/10th speed.
+        eff_leg_min = max(1.0, shortest_times_from(
+            self.state.road_graph, from_node, wade).get(to_node, 1.0))
+        if visited and visited[-1].actual_departure:
+            from_time = visited[-1].actual_departure
+        elif not visited and vr.start_time and self.state.clock >= vr.start_time:
+            from_time = vr.start_time
+        else:
+            from_time = nxt.planned_arrival - timedelta(minutes=eff_leg_min)
+        span = eff_leg_min * 60.0
         frac = max(0.0, min(1.0, (self.state.clock - from_time).total_seconds() / span))
-        pt = _interp_polyline(self._leg_polyline(from_node, to_node, wade), frac)
+        pt = _interp_polyline(self._leg_polyline(from_node, to_node, wade, use_base=True), frac)
         return pt or default
+
+    def _active_edge_ids(self) -> set:
+        """Always return every edge so the full road network stays visible
+        throughout the simulation (routes, bypasses, floods, junctions all shown)."""
+        return set(self.geometry.keys())
+
+    def _build_proposed_paths(self, proposed_routes):
+        if not proposed_routes: return None
+        out = {}
+        for vid, nodes in proposed_routes.items():
+            if len(nodes) < 2: continue
+            v = self.state.get_vehicle(vid)
+            wade = float(v.wade_capability) if v else 0.3
+            path = []
+            for a, b in zip(nodes[:-1], nodes[1:]):
+                for (lat, lng) in self._leg_polyline(a, b, wade, use_base=False):
+                    ll = [lng, lat]
+                    if not path or path[-1] != ll:
+                        path.append(ll)
+            out[vid] = path
+        return out
 
     # ----- view model -----
     def snapshot(self) -> Dict:
@@ -228,6 +348,7 @@ class SimulationController:
         for d in s.decisions:
             key = d.approval_status.value
             by_status[key if key in by_status else "other"] += 1
+        active_eids = self._active_edge_ids()
         return {
             "clock": s.clock.isoformat(),
             "sim_tick": s.sim_tick,
@@ -252,7 +373,9 @@ class SimulationController:
                  "description": d.description,
                  "engine": d.engine.value,
                  "timestamp": d.timestamp.isoformat(),
-                 "added_delay_min": d.impact_estimate.get("added_delay_min", 0.0)}
+                 "added_delay_min": d.impact_estimate.get("added_delay_min", 0.0),
+                 "proposed_routes": d.execution_result.get("proposed_routes") if d.execution_result else None,
+                 "proposed_paths": self._build_proposed_paths(d.execution_result.get("proposed_routes")) if d.execution_result else None}
                 for d in s.get_pending_decisions()
             ],
             # Human-resolved (approved/rejected) decisions, newest first — the
@@ -278,25 +401,133 @@ class SimulationController:
             "customers": [
                 {"id": c.id, "lat": c.location.lat, "lng": c.location.lng,
                  "name": c.location.name, "priority": c.priority,
-                 "type": c.type, "orders": sum(c.orders.values())}
+                 "type": c.type, "orders": sum(c.orders.values()),
+                 # True once any vehicle has actually visited (actual_arrival set).
+                 # Persists even after demand_generation refills c.orders.
+                 "delivered": any(
+                     s.customer_id == c.id and s.actual_arrival is not None
+                     for vr in s.plan.values() for s in vr.stops)}
                 for c in s.customers.values()
             ],
             "routes": [
                 {"edge_id": eid, "path": [[lng, lat] for (lat, lng) in poly]}
                 for eid, poly in self.geometry.items()
+                if eid in active_eids
             ],
         }
 
     # ----- human-in-the-loop approval -----
+    def _handle_sibling_decisions(self, primary_d, status):
+        """Auto-resolve the matching REROUTE decision on the reverse edge so the user
+        doesn't have to click twice for a bidirectional traffic jam."""
+        from fleet.contracts.state import DecisionAction
+        if primary_d.action == DecisionAction.REROUTE:
+            ev = next((e for e in self.state.events if e.id == primary_d.event_id), None)
+            if ev and "->" in ev.target:
+                a, b = ev.target.split("->")
+                sibling_target = f"{b}->{a}"
+                for other_d in self.state.get_pending_decisions():
+                    if other_d.id != primary_d.id and other_d.action == DecisionAction.REROUTE:
+                        o_ev = next((e for e in self.state.events if e.id == other_d.event_id), None)
+                        if o_ev and o_ev.target == sibling_target and o_ev.event_type == ev.event_type:
+                            other_d.approval_status = status
+                            other_d.approved_by = "auto-sibling"
+                            other_d.approved_at = self.state.clock
+
     def approve(self, decision_id: str):
         d = self._find_pending(decision_id)
+
+        # Extract pre-computed targeted plan before dispatcher.apply() overwrites
+        # execution_result.  The plan was computed per-vehicle (only affected
+        # vehicles) so we apply only those routes, leaving others unchanged.
+        from fleet.contracts.state import DecisionAction
+        proposed_plan = None
+        if d.action in (DecisionAction.REROUTE, DecisionAction.RESCHEDULE):
+            proposed_plan = d.impact_estimate.get("_proposed_plan")
+
         d.approval_status = ApprovalStatus.APPROVED
         d.approved_by = "human"
         d.approved_at = self.state.clock
+        self._handle_sibling_decisions(d, ApprovalStatus.APPROVED)
         self.components.dispatcher.apply(self.state, d)
+
+        from fleet.dispatch.dispatcher import RESOLVE_ACTIONS
         if d.action in RESOLVE_ACTIONS and self.state.total_orders_pending() > 0:
+            from fleet.routing.planner import plan_total_minutes, reroute
             before = plan_total_minutes(self.state)
-            reroute(self.state, self.components.optimizer)
+
+            if proposed_plan:
+                # Reschedule stale timestamps: the plan was pre-computed when the
+                # decision was queued; state.clock may have advanced before approve.
+                # We shift so planned_arrival of the first unvisited stop equals
+                # state.clock + leg_time_to_that_stop.  This puts frac≈0 in
+                # _vehicle_position (vehicle starts at from_node, not at destination).
+                for vid, new_vr in proposed_plan.items():
+                    unvisited = sorted(
+                        [s for s in new_vr.stops if s.actual_arrival is None],
+                        key=lambda s: s.sequence)
+                    if not unvisited:
+                        continue
+                    visited = sorted(
+                        [s for s in new_vr.stops if s.actual_arrival is not None],
+                        key=lambda s: s.sequence)
+                    from_node = visited[-1].customer_id if visited else "DEPOT"
+                    v = self.state.get_vehicle(vid)
+                    wade = float(v.wade_capability) if v else 0.3
+                    dist = shortest_times_from(self.state.road_graph, from_node, wade)
+                    leg_min = dist.get(unvisited[0].customer_id, 1.0)
+                    
+                    is_driving = False
+                    if visited:
+                        last = visited[-1]
+                        if last.actual_departure and self.state.clock >= last.actual_departure:
+                            is_driving = True
+                    # No visited stops → vehicle at/near DEPOT, allow full re-plan
+
+                    if not is_driving:
+                        ret_min = 0.0
+                        if not visited and new_vr.start_time and new_vr.start_time < self.state.clock:
+                            # Vehicle left DEPOT but hasn't visited any customer yet.
+                            # Calculate how far along the original DEPOT->first_stop it is
+                            # and store a return context so it animates back to DEPOT.
+                            old_vr = self.state.plan.get(vid)
+                            if old_vr and old_vr.stops and old_vr.start_time:
+                                old_unv = sorted(
+                                    [s for s in old_vr.stops if s.actual_arrival is None],
+                                    key=lambda s: s.sequence)
+                                if old_unv:
+                                    old_to = old_unv[0].customer_id
+                                    eff = max(1.0, shortest_times_from(
+                                        self.state.road_graph, "DEPOT", wade).get(old_to, 1.0))
+                                    frac = max(0.0, min(1.0, (
+                                        self.state.clock - old_vr.start_time
+                                    ).total_seconds() / (eff * 60.0)))
+                                    if frac > 0.005:
+                                        ret_eff = max(0.5, shortest_times_from(
+                                            self.state.road_graph, old_to, wade).get("DEPOT", 1.0))
+                                        ret_min = frac * ret_eff
+                                        self._return_context[vid] = {
+                                            'from_node': "DEPOT", 'to_node': old_to,
+                                            'frac_at_approval': frac,
+                                            'approval_clock': self.state.clock,
+                                            'return_duration_min': ret_min,
+                                        }
+                        new_vr.start_time = self.state.clock + timedelta(minutes=ret_min)
+                        target_arrival = self.state.clock + timedelta(minutes=ret_min + leg_min)
+
+                        if unvisited[0].planned_arrival is not None:
+                            shift = target_arrival - unvisited[0].planned_arrival
+                            if abs(shift.total_seconds()) > 1:
+                                for s in unvisited:
+                                    if s.planned_arrival is not None:
+                                        s.planned_arrival += shift
+                                    if s.planned_departure is not None:
+                                        s.planned_departure += shift
+                self.state.plan.update(proposed_plan)
+            else:
+                # Fallback: full re-solve (e.g. REPRIORITIZE / REALLOCATE)
+                reroute(self.state, self.components.optimizer)
+
             added = max(0.0, plan_total_minutes(self.state) - before)
             d.impact_estimate["added_delay_min"] = round(added, 1)
         return d
@@ -306,6 +537,7 @@ class SimulationController:
         d.approval_status = ApprovalStatus.REJECTED
         d.approved_by = "human"
         d.approved_at = self.state.clock
+        self._handle_sibling_decisions(d, ApprovalStatus.REJECTED)
         return d
 
     def _find_pending(self, decision_id: str):

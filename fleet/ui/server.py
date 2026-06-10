@@ -77,7 +77,7 @@ def _regex_complete(system: str, user: str) -> dict:
     if re.search(r"broke|broken|breakdown|h[ỏo]ng|h[ưu] h[ỏo]ng|stall", low):
         add("vehicle_breakdown", sev("high"))
     if re.search(r"traffic|jam|congest|k[ẹe]t|t[ắa]c", low):
-        add("traffic", sev("medium"), edge_status="congested", traffic_factor=3.0)
+        add("traffic", sev("medium"), edge_status="congested", traffic_factor=15.0)
     if re.search(r"urgent|asap|g[ấâ]p|kh[ẩâ]n", low):
         add("urgent_order", sev("high"))
     if re.search(r"surge|spike|rush|t[ăa]ng", low):

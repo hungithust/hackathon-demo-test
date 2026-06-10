@@ -13,7 +13,7 @@ from fleet.intake.extractor import (
 
 _EDGE_EVENTS = {EventType.TRAFFIC, EventType.FLOODED_AREA}
 _DEFAULT_FLOOD_LEVEL = 0.5
-_DEFAULT_TRAFFIC_FACTOR = 3.0
+_DEFAULT_TRAFFIC_FACTOR = 100.0
 
 
 class IntakeController:

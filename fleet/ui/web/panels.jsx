@@ -101,6 +101,7 @@ function DecisionCard({ dec, state, onApprove, onReject }) {
   const a = ACTIONS[dec.action];
   const heavy = dec.added_delay_min >= 30;
   const evt = state.events.find((e) => e.id === dec.event_id);
+  const affectedVids = dec.proposed_routes ? Object.keys(dec.proposed_routes) : [];
   return (
     <div className={"dec-card" + (heavy ? " crit" : "") + (dec._new ? " attention flash-in" : "")}
       style={{ "--dc-accent": a.color, "--dc-accent-bg": a.bg }}>
@@ -110,6 +111,32 @@ function DecisionCard({ dec, state, onApprove, onReject }) {
         {evt && <span style={{ marginLeft: "auto" }}><SeverityChip sev={evt.severity}/></span>}
       </div>
       <div className="dec-desc" dangerouslySetInnerHTML={{ __html: dec.description }}/>
+
+      {/* Affected vehicles + proposed route preview */}
+      {affectedVids.length > 0 && (
+        <div style={{ marginTop: 8, padding: "8px 10px", background: "rgba(34,197,94,.07)", borderRadius: 6, border: "1px solid rgba(34,197,94,.18)" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6, fontSize: 11, color: "#4ade80", fontWeight: 600 }}>
+            <Icon name="truck" size={12}/>
+            {affectedVids.length} xe bị ảnh hưởng — tuyến mới:
+          </div>
+          {Object.entries(dec.proposed_routes).map(([vid, nodes]) => {
+            const stops = (nodes || []).filter(n => n !== "DEPOT");
+            const preview = stops.length > 0
+              ? stops.slice(0, 3).join(" → ") + (stops.length > 3 ? ` →+${stops.length - 3}` : "")
+              : "(không đổi)";
+            return (
+              <div key={vid} style={{ display: "flex", alignItems: "baseline", gap: 6, marginTop: 3, fontSize: 10.5 }}>
+                <span style={{ fontFamily: "var(--mono)", color: "#60a5fa", background: "rgba(59,130,246,.12)", borderRadius: 4, padding: "1px 5px", flexShrink: 0 }}>{vid}</span>
+                <span style={{ color: "var(--text-3)", fontFamily: "var(--mono)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>→ {preview}</span>
+              </div>
+            );
+          })}
+          <div style={{ marginTop: 6, fontSize: 10, color: "var(--text-4)", fontStyle: "italic" }}>
+            Tuyến màu xanh lá trên bản đồ là tuyến đề xuất
+          </div>
+        </div>
+      )}
+
       <div className="dec-impact">
         <div className={"impact-pill delay" + (heavy ? " heavy" : "")}>
           <span className="iv mono">+{Math.round(dec.added_delay_min)}</span>

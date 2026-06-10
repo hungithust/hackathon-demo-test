@@ -69,7 +69,9 @@ class CpuSolver:
         horizon = max([mins(f.shift_end) for f in problem.fleet]
                       + [mins(t.tw_end) for t in problem.tasks]) + 1
 
-        manager = pywrapcp.RoutingIndexManager(n, num_vehicles, depot)
+        starts = [problem.locations.index(f.start_location or problem.depot_id) for f in problem.fleet]
+        ends = [depot] * num_vehicles
+        manager = pywrapcp.RoutingIndexManager(n, num_vehicles, starts, ends)
         routing = pywrapcp.RoutingModel(manager)
 
         def time_int(value: float) -> int:
@@ -183,6 +185,8 @@ class CpuSolver:
             remaining = sum(demand[manager.IndexToNode(ix)] for ix in node_indices)
             stops: List[SolvedStop] = []
             for ix in node_indices:
+                if ix == routing.Start(vehicle_id):
+                    continue
                 node = manager.IndexToNode(ix)
                 if node == depot:
                     continue

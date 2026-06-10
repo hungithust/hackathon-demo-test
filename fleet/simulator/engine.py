@@ -102,26 +102,93 @@ class WorldSimulator:
             self._inject_sudden_events(state)
         self._advance_vehicles(state)
 
+    def _collect_planned_next_edges(self, state: WorldState):
+        """Return edges on the 2nd-unvisited leg (vehicle not yet committed) so
+        injected jams never land under a vehicle that can't physically escape.
+        Direct DEPOT exit edges (from_node==DEPOT) are excluded so disruptions
+        appear deep in the network, not on depot access roads."""
+        planned = []
+        for route in state.plan.values():
+            unvisited = sorted([s for s in route.stops if s.actual_arrival is None],
+                               key=lambda s: s.sequence)
+            if len(unvisited) < 2:
+                continue
+            # Target the leg vehicle is NOT yet on (1st-unvisited → 2nd-unvisited)
+            from_node = unvisited[0].customer_id
+            to_node = unvisited[1].customer_id
+            for e in state.road_graph.out_edges(from_node):
+                if e.to_node == to_node and e.status == EdgeStatus.OPEN:
+                    planned.append(e)
+                    break
+        return planned
+
+    def _flood_area(self, state: WorldState, center_edge, flood_level: float = 0.5,
+                    max_extra: int = 4) -> None:
+        """Flood the center edge plus up to max_extra neighbouring OPEN edges at its
+        endpoints, simulating a flood *zone* rather than a single road segment."""
+        nodes_hit = {center_edge.from_node, center_edge.to_node}
+        self.disrupt_edge(state, center_edge.id, EdgeStatus.FLOODED, flood_level=flood_level)
+        candidates = [
+            e for e in state.road_graph.edges.values()
+            if e.status == EdgeStatus.OPEN
+            and (e.from_node in nodes_hit or e.to_node in nodes_hit)
+            and e.id != center_edge.id
+        ]
+        self.rng.shuffle(candidates)
+        for e in candidates[:max_extra]:
+            self.disrupt_edge(state, e.id, EdgeStatus.FLOODED, flood_level=flood_level)
+
     def _inject_sudden_events(self, state: WorldState) -> None:
-        """Randomly inject sudden traffic accidents on open edges."""
+        """Randomly inject sudden traffic/flood disruptions.
+
+        Traffic jams are preferentially placed on edges vehicles are currently
+        heading towards so they reliably trigger reroute decisions in the demo.
+        Floods affect a geographic zone (center edge + neighbouring edges)."""
+        # Fixed demo jam: DEPOT→C001 congestion injected once at tick 120.
+        # Runs before the ON_ROUTE / tick-gate guards so it always fires.
+        if state.sim_tick == 120 and not getattr(self, "_depot_c001_jam_injected", False):
+            depot_c001 = state.road_graph.get_edge("DEPOT->C001")
+            if depot_c001 and depot_c001.status == EdgeStatus.OPEN:
+                self.disrupt_edge(state, "DEPOT->C001", EdgeStatus.CONGESTED,
+                                  traffic_factor=10.0)
+            self._depot_c001_jam_injected = True
+
+        if not any(v.status == VehicleStatus.ON_ROUTE for v in state.vehicles.values()):
+            return
+
+        if state.sim_tick < 120:
+            return
+
         if getattr(self, "_last_accident_tick", None) is None:
             self._last_accident_tick = state.sim_tick
 
-        # Only check current active events from state
         active_traffic = sum(1 for e in state.get_active_events() if e.event_type == EventType.TRAFFIC)
         active_flood = sum(1 for e in state.get_active_events() if e.event_type == EventType.FLOODED_AREA)
 
-        # Every 2 ticks, 60% chance of sudden disruption
         if state.sim_tick - self._last_accident_tick >= 2:
             if self.rng.random() < 0.6:
-                open_edges = [e for e in state.road_graph.edges.values() if e.status == EdgeStatus.OPEN]
+                # Exclude direct DEPOT exit/entry edges so disruptions appear
+                # in the mid-network, not on depot access roads.
+                open_edges = [
+                    e for e in state.road_graph.edges.values()
+                    if e.status == EdgeStatus.OPEN
+                    and e.from_node != "DEPOT"
+                    and e.to_node != "DEPOT"
+                ]
+                if not open_edges:  # fallback when graph has only depot edges
+                    open_edges = [e for e in state.road_graph.edges.values()
+                                  if e.status == EdgeStatus.OPEN]
                 if open_edges:
-                    edge = self.rng.choice(open_edges)
-                    # Randomly decide between TRAFFIC and FLOODED_AREA
                     if self.rng.random() < 0.3 and active_flood < 2:
-                        self.disrupt_edge(state, edge.id, EdgeStatus.FLOODED, flood_level=0.5)
+                        center = self.rng.choice(open_edges)
+                        self._flood_area(state, center, flood_level=0.5)
                     elif active_traffic < 3:
-                        self.disrupt_edge(state, edge.id, EdgeStatus.BLOCKED, traffic_factor=float("inf"))
+                        # Prefer the 2nd-leg ahead so no jam lands under a vehicle
+                        planned = self._collect_planned_next_edges(state)
+                        pool = planned if planned else open_edges
+                        edge = self.rng.choice(pool)
+                        self.disrupt_edge(state, edge.id, EdgeStatus.CONGESTED,
+                                          traffic_factor=10.0)
             self._last_accident_tick = state.sim_tick
 
     def inject_event(self, state: WorldState, event_type: EventType,
@@ -151,9 +218,15 @@ class WorldSimulator:
         evt_type = (EventType.FLOODED_AREA
                     if new_status == EdgeStatus.FLOODED
                     else EventType.TRAFFIC)
-        severity = (EventSeverity.CRITICAL
-                    if new_status == EdgeStatus.BLOCKED
-                    else EventSeverity.MEDIUM)
+        if new_status == EdgeStatus.BLOCKED:
+            severity = EventSeverity.CRITICAL
+        elif new_status == EdgeStatus.FLOODED:
+            severity = EventSeverity.HIGH
+        elif traffic_factor >= 5.0:
+            # Heavy traffic jam: causes delay well above the 30-min SLA threshold.
+            severity = EventSeverity.HIGH
+        else:
+            severity = EventSeverity.MEDIUM
         evt = Event(
             id=self._new_event_id(), event_type=evt_type, target=edge_id,
             severity=severity, started_at=state.clock,
@@ -310,6 +383,12 @@ class WorldSimulator:
                     vehicle.current_stop_index = stop.sequence
                     vehicle.status = VehicleStatus.ON_ROUTE
                     self._deliver(state, vehicle, stop.customer_id)
+            # Vehicle has left the depot but hasn't reached its first stop yet
+            if vehicle.status == VehicleStatus.AT_DEPOT:
+                has_departed = route.start_time and state.clock >= route.start_time
+                has_unvisited = any(s.actual_arrival is None for s in route.stops)
+                if has_departed and has_unvisited:
+                    vehicle.status = VehicleStatus.ON_ROUTE
             all_visited = route.stops and all(
                 s.actual_arrival is not None for s in route.stops)
             shift_done = route.end_time is None or state.clock >= route.end_time
@@ -337,7 +416,20 @@ class WorldSimulator:
                     last.actual_arrival + timedelta(minutes=DEFAULT_SERVICE_TIME_MIN))
             else:
                 cur_node = "DEPOT"
-                cur_time = state.depot.opening_time
+                if route.stops:
+                    first_stop = route.stops[0]
+                    cache_key = ("DEPOT", float(vehicle.wade_capability))
+                    dist = self._travel_time_cache.get(cache_key)
+                    if dist is None:
+                        dist = shortest_times_from(state.road_graph, "DEPOT", vehicle.wade_capability)
+                        self._travel_time_cache[cache_key] = dist
+                    
+                    if first_stop.customer_id in dist:
+                        cur_time = first_stop.planned_arrival - timedelta(minutes=dist[first_stop.customer_id])
+                    else:
+                        cur_time = state.depot.opening_time
+                else:
+                    cur_time = state.depot.opening_time
 
             for stop in sorted(route.stops, key=lambda s: s.sequence):
                 if stop.actual_arrival is not None:
@@ -366,6 +458,12 @@ class WorldSimulator:
                 cur_node = stop.customer_id
                 cur_time = stop.actual_departure
 
+            # Vehicle has left the depot but hasn't reached its first stop yet
+            if vehicle.status == VehicleStatus.AT_DEPOT:
+                has_departed = route.start_time and state.clock >= route.start_time
+                has_unvisited = any(s.actual_arrival is None for s in route.stops)
+                if has_departed and has_unvisited:
+                    vehicle.status = VehicleStatus.ON_ROUTE
             all_visited = route.stops and all(
                 s.actual_arrival is not None for s in route.stops)
             shift_done = route.end_time is None or state.clock >= route.end_time

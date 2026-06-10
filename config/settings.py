@@ -13,7 +13,7 @@ class Settings:
     detector_engine: str = "rule"      # rule | zscore
     forecaster_engine: str = "ewma"    # ewma | prophet
     seed: int = 42
-    tick_minutes: int = 5
+    tick_minutes: int = 1
     anthropic_api_key: str = ""
     cuopt_endpoint: str = "localhost:8001"
     auto_approve_delay_threshold_min: float = 15.0   # spec §6.6
@@ -75,7 +75,7 @@ def load_settings(env: Optional[Mapping[str, str]] = None) -> Settings:
         detector_engine=e.get("DETECTOR_ENGINE", "rule"),
         forecaster_engine=e.get("FORECASTER_ENGINE", "ewma"),
         seed=int(e.get("SEED", "42")),
-        tick_minutes=int(e.get("TICK_MINUTES", "5")),
+        tick_minutes=int(e.get("TICK_MINUTES", "1")),
         anthropic_api_key=e.get("ANTHROPIC_API_KEY", ""),
         cuopt_endpoint=e.get("CUOPT_ENDPOINT", "localhost:8001"),
         auto_approve_delay_threshold_min=float(

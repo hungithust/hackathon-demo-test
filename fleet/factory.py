@@ -35,14 +35,33 @@ class Components:
     dispatcher: Dispatcher
 
 
+class _WithCpuFallback:
+    """Wraps a primary optimizer (e.g. CuOptAdapter) with automatic fallback to
+    CpuSolver on any exception, so a cuOpt timeout / overload never 500s the API."""
+
+    def __init__(self, primary: RouteOptimizer, fallback: RouteOptimizer):
+        self.primary = primary
+        self.fallback = fallback
+
+    def solve(self, problem):
+        try:
+            return self.primary.solve(problem)
+        except Exception as exc:
+            print(f"[optimizer] primary solver failed ({exc}); falling back to CpuSolver")
+            return self.fallback.solve(problem)
+
+
 def build_components(settings) -> Components:
     # Routing engine. cuOpt (GPU) when requested AND an endpoint is configured;
     # otherwise fall back to the CPU OR-Tools solver so the system always runs.
+    # cuOpt is always wrapped with _WithCpuFallback so any network/timeout error
+    # auto-retries on CPU without surfacing a 500 to the UI.
+    cpu = CpuSolver(settings)
     if settings.routing_engine == "cuopt" and getattr(
             settings, "cuopt_endpoint", ""):
-        optimizer: RouteOptimizer = CuOptAdapter(settings)
+        optimizer: RouteOptimizer = _WithCpuFallback(CuOptAdapter(settings), cpu)
     else:
-        optimizer = CpuSolver(settings)
+        optimizer = cpu
 
     # Decision engine. NIM (self-hosted LLM) when requested AND an endpoint is
     # set; Claude (LLM) when requested AND an API key is configured; the scoring

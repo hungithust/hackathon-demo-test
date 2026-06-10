@@ -70,6 +70,9 @@ class NimAgent:
             raise RuntimeError(
                 "NimAgent has no transport and settings.nim_endpoint is empty; "
                 "configure an endpoint or inject a `complete` callable.")
+                
+        if not (endpoint.startswith("http://") or endpoint.startswith("https://")):
+            endpoint = "http://" + endpoint
 
         import json
         import requests

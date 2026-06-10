@@ -93,7 +93,7 @@ function App() {
 
         <div className="col col-center">
           <div className="panel" style={{ flex: 1, padding: 0, overflow: "hidden" }}>
-            <DispatchMap state={state} selectedVeh={selectedVeh} onSelectVeh={setSelectedVeh} selectedEvent={selectedEvent}/>
+            <DispatchMap state={state} speed={speed} selectedVeh={selectedVeh} onSelectVeh={setSelectedVeh} selectedEvent={selectedEvent}/>
           </div>
           <FleetStrip state={state} selectedVeh={selectedVeh} onSelectVeh={setSelectedVeh}/>
         </div>

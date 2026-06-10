@@ -42,10 +42,10 @@ const VEHICLE_STATUS = {
 };
 
 const PRIORITY = {
-  1: { color: "#5FC9FF", r: 9.5, label: "P1 · Critical" },
-  2: { color: "#4DA6FF", r: 7.5, label: "P2 · High" },
-  3: { color: "#5E8BD0", r: 6.0, label: "P3 · Normal" },
-  4: { color: "#4C6493", r: 5.0, label: "P4 · Low" },
+  1: { color: "#ef4444", r: 4.5, label: "P1 · Critical" },
+  2: { color: "#f97316", r: 4.5, label: "P2 · High" },
+  3: { color: "#3b82f6", r: 4.5, label: "P3 · Normal" },
+  4: { color: "#64748b", r: 4.5, label: "P4 · Low" },
 };
 
 // ---- formatters ----
