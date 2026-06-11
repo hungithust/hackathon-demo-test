@@ -38,15 +38,32 @@ _INTAKE_SCHEMA = {
 }
 
 _SYSTEM = (
-    "You convert a dispatcher's free-text field report into structured "
-    "disruption events for a delivery-fleet system. Identify every distinct "
-    "disruption in the report. For each, choose one event_type from "
-    + ", ".join(e.value for e in EventType)
-    + " and a severity from " + ", ".join(s.value for s in EventSeverity)
-    + ". `target_hint` must quote the customer, vehicle, or road the report "
-    "names so it can be matched to the world roster. For traffic/flooded_area "
-    "set edge_status and flood_level/traffic_factor when stated. Respond using "
-    "the provided JSON schema only."
+    "You are an information extractor for a delivery-fleet dispatcher. Read the "
+    "field report and output ONLY JSON {\"reports\": [...]} per the schema. "
+    "Create one report object for EACH distinct disruption mentioned. "
+    "event_type must be one of: " + ", ".join(e.value for e in EventType)
+    + ". severity one of: " + ", ".join(s.value for s in EventSeverity)
+    + ". Set target_hint to the EXACT roster id the report refers to (a vehicle "
+    "id like V003, a customer id like C001, or the road toward that customer). "
+    "If a vehicle number N is said, the id is V00N. For traffic/flooded_area set "
+    "edge_status and flood_level/traffic_factor when stated. Do not invent "
+    "disruptions; if none are present return {\"reports\": []}."
+)
+
+# Few-shot examples: a small finetuned NIM needs these to follow the extraction
+# task rather than its decision-task tuning. Proven to lift the local
+# Nemotron-Nano-8B from 0 reports to correct extraction.
+_EXAMPLES = (
+    'Example 1\n'
+    'Report: "truck 2 has a flat tire near the depot"\n'
+    '{"reports":[{"event_type":"vehicle_breakdown","target_hint":"V002",'
+    '"severity":"high"}]}\n\n'
+    'Example 2\n'
+    'Report: "C003 urgently needs more stock and the road to C001 is flooded"\n'
+    '{"reports":['
+    '{"event_type":"urgent_order","target_hint":"C003","severity":"high"},'
+    '{"event_type":"flooded_area","target_hint":"C001","severity":"high",'
+    '"edge_status":"flooded","flood_level":0.6}]}\n'
 )
 
 
@@ -61,9 +78,10 @@ def _roster(state: WorldState) -> str:
 
 def build_intake_messages(text: str, state: WorldState) -> Tuple[str, str]:
     """Return (system, user) prompt strings. Pure: deterministic given text+state."""
-    user = (f"World roster:\n{_roster(state)}\n\n"
-            f"Field report: {text}\n"
-            "Extract all disruption events as JSON.")
+    user = (f"Roster:\n{_roster(state)}\n\n"
+            f"{_EXAMPLES}\n"
+            f"Now extract from this report:\n\"{text}\"\n"
+            "Output the JSON only.")
     return _SYSTEM, user
 
 
