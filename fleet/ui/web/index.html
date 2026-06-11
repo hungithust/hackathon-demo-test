@@ -295,7 +295,7 @@ body{
 .waveform.live i{animation:wave .7s ease-in-out infinite;}
 @keyframes wave{0%,100%{height:14%;}50%{height:90%;}}
 
-.intake-flow{border-top:1px dashed var(--border);padding-top:12px;display:flex;flex-direction:column;gap:11px;}
+.intake-flow{border-top:1px dashed var(--border);padding-top:12px;display:flex;flex-direction:column;gap:11px;max-height:34vh;overflow-y:auto;}
 .flow-step{opacity:0;transform:translateY(6px);animation:flowin .4s forwards;}
 @keyframes flowin{to{opacity:1;transform:none;}}
 .flow-label{font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--text-3);font-weight:600;margin-bottom:6px;display:flex;align-items:center;gap:6px;}
