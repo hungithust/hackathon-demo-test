@@ -14,12 +14,14 @@ ortools>=9.8
 fastapi>=0.110
 uvicorn>=0.29
 python-multipart>=0.0.7   # UI: /api/report_audio mic upload (FastAPI File())
-# --- intake layer (optional, lazy-imported; not needed for the test suite) ---
-# NOTE: /api/report_audio also needs ffmpeg on PATH to decode browser mic audio
-#       (WebM/Opus) to 16kHz mono PCM for the Riva stream.
-# openai>=1.0          # OpenAI-compatible client for the NIM extractor transport
-# faster-whisper>=1.0  # self-hosted Vietnamese ASR (WhisperTranscriber)
-# nvidia-riva-client   # Riva ASR NIM transport (RivaTranscriber)
+# --- intake / voice layer (needed to run the UI with voice locally) -----------
+# The text "Extract & dispatch" path needs only `openai` (NIM extractor on :8002).
+# The mic path additionally needs `nvidia-riva-client` (RIVA on :50051) AND the
+# ffmpeg BINARY on PATH (decodes browser WebM/Opus -> 16kHz mono PCM). On Windows:
+#   winget install Gyan.FFmpeg   (or: choco install ffmpeg) — then reopen the shell.
+openai>=1.0              # OpenAI-compatible client for the NIM extractor transport
+nvidia-riva-client       # Riva ASR NIM transport (RivaTranscriber)
+# faster-whisper>=1.0    # alternative self-hosted ASR (ASR_ENGINE=whisper)
 # --- real-map world (optional, lazy-imported; only for WORLD=real) ---
 # osmnx>=2.0       # OSM drive graph download + load
 # networkx>=3.0    # shortest-path routing over the graph
