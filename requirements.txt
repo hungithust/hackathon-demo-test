@@ -13,7 +13,10 @@ ortools>=9.8
 # Needed only for the UI; the headless system and the test suite do not import it.
 fastapi>=0.110
 uvicorn>=0.29
+python-multipart>=0.0.7   # UI: /api/report_audio mic upload (FastAPI File())
 # --- intake layer (optional, lazy-imported; not needed for the test suite) ---
+# NOTE: /api/report_audio also needs ffmpeg on PATH to decode browser mic audio
+#       (WebM/Opus) to 16kHz mono PCM for the Riva stream.
 # openai>=1.0          # OpenAI-compatible client for the NIM extractor transport
 # faster-whisper>=1.0  # self-hosted Vietnamese ASR (WhisperTranscriber)
 # nvidia-riva-client   # Riva ASR NIM transport (RivaTranscriber)

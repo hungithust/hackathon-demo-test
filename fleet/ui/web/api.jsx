@@ -66,6 +66,19 @@ const Api = {
     return { raw: res.raw, reports: res.reports, decisions: res.decisions,
              state: normalize(res.snapshot) };
   },
+  reportAudio: async (blob) => {
+    const fd = new FormData();
+    fd.append("audio", blob, "report.webm");
+    const r = await fetch("/api/report_audio", { method: "POST", body: fd });
+    if (!r.ok) {
+      let detail = "HTTP " + r.status;
+      try { const j = await r.json(); if (j && j.detail) detail = j.detail; } catch (e) {}
+      throw new Error(detail);
+    }
+    const res = await r.json();
+    return { raw: res.raw, reports: res.reports, decisions: res.decisions,
+             state: normalize(res.snapshot) };
+  },
   getSettings:  async () => jget("/api/settings"),
   saveSettings: async (values) => normalize(await jpost("/api/settings", { values })),
 };

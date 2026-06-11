@@ -241,32 +241,54 @@ function FleetStrip({ state, selectedVeh, onSelectVeh }) {
 }
 
 // ---------------- VOICE / FIELD REPORT ----------------
-function VoicePanel({ onReport, clock }) {
+function VoicePanel({ onReport, onReportAudio, clock }) {
   const [text, setText] = React.useState("");
   const [phase, setPhase] = React.useState("idle"); // idle | rec | processing
   const [result, setResult] = React.useState(null);
-  const recTimer = React.useRef(null);
+  const [error, setError] = React.useState(null);
+  const recRef = React.useRef(null);   // MediaRecorder
+  const chunksRef = React.useRef([]);
 
   const run = (raw) => {
     if (!raw.trim()) return;
-    setPhase("processing"); setResult(null);
+    setPhase("processing"); setResult(null); setError(null);
     setTimeout(async () => {
-      const r = await onReport(raw);
-      setResult(r); setPhase("idle");
-    }, 750);
+      try { const r = await onReport(raw); setResult(r); }
+      catch (e) { setError(e.message); }
+      finally { setPhase("idle"); }
+    }, 250);
+  };
+
+  // Real mic capture: getUserMedia -> MediaRecorder -> blob -> /api/report_audio
+  const startRec = async () => {
+    setResult(null); setError(null);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const rec = new MediaRecorder(stream);
+      chunksRef.current = [];
+      rec.ondataavailable = (e) => { if (e.data.size) chunksRef.current.push(e.data); };
+      rec.onstop = async () => {
+        stream.getTracks().forEach((t) => t.stop());
+        const blob = new Blob(chunksRef.current, { type: rec.mimeType || "audio/webm" });
+        setPhase("processing");
+        try { const r = await onReportAudio(blob); setResult(r); if (r.raw) setText(r.raw); }
+        catch (e) { setError(e.message); }
+        finally { setPhase("idle"); }
+      };
+      recRef.current = rec;
+      rec.start();
+      setPhase("rec");
+    } catch (e) {
+      setError("Microphone unavailable: " + e.message);
+      setPhase("idle");
+    }
   };
 
   const toggleMic = () => {
     if (phase === "rec") {
-      clearTimeout(recTimer.current);
-      setPhase("processing");
-      const sample = text.trim() || VOICE_EXAMPLES[Math.floor(Math.random() * VOICE_EXAMPLES.length)];
-      setText(sample);
-      setTimeout(async () => { const r = await onReport(sample); setResult(r); setPhase("idle"); }, 900);
-    } else {
-      setResult(null); setPhase("rec");
-      // auto-stop after a few seconds if the user forgets
-      recTimer.current = setTimeout(() => toggleMic(), 4200);
+      try { recRef.current && recRef.current.stop(); } catch (e) {}
+    } else if (phase === "idle") {
+      startRec();
     }
   };
 
@@ -279,7 +301,7 @@ function VoicePanel({ onReport, clock }) {
       </div>
       <div className="voice">
         <div className="voice-tools">
-          <button className={"mic-btn" + (phase === "rec" ? " rec" : "")} onClick={toggleMic} title="Hold to dictate (simulated)">
+          <button className={"mic-btn" + (phase === "rec" ? " rec" : "")} onClick={toggleMic} title={phase === "rec" ? "Click to stop & transcribe" : "Click to record (RIVA ASR)"}>
             <Icon name={phase === "rec" ? "waves" : "mic"} size={18}/>
           </button>
           {phase === "rec" ? (
@@ -303,6 +325,10 @@ function VoicePanel({ onReport, clock }) {
         <button className="btn primary" style={{ justifyContent: "center" }} disabled={phase !== "idle" || !text.trim()} onClick={() => run(text)}>
           {phase === "processing" ? <><Icon name="reset" size={14} className="spin"/>Parsing…</> : <><Icon name="bolt" size={14}/>Extract &amp; dispatch</>}
         </button>
+
+        {error && (
+          <div style={{ fontSize: 12, color: "var(--danger, #e5484d)", marginTop: 4 }}>{error}</div>
+        )}
 
         {result && (
           <div className="intake-flow">

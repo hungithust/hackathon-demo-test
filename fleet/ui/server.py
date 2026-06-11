@@ -13,10 +13,12 @@ the original Streamlit model. POST /api/reset rebuilds it.
 """
 
 import re
+import shutil
+import subprocess
 from pathlib import Path
 from typing import Callable, Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -141,12 +143,7 @@ def post_reject(decision_id: str):
     return c.snapshot()
 
 
-@app.post("/api/report")
-def post_report(body: ReportBody):
-    c = _controller()
-    ic = IntakeController(c, complete=_intake_complete(c.settings),
-                          transcriber=build_transcriber(c.settings))
-    result = ic.report(text=body.text or None)
+def _report_payload(result, c) -> dict:
     return {
         "raw": result.raw_text,
         "reports": [{"event_type": r.event_type.value, "target": r.target,
@@ -154,6 +151,50 @@ def post_report(body: ReportBody):
         "decisions": result.decisions,
         "snapshot": c.snapshot(),
     }
+
+
+@app.post("/api/report")
+def post_report(body: ReportBody):
+    c = _controller()
+    ic = IntakeController(c, complete=_intake_complete(c.settings),
+                          transcriber=build_transcriber(c.settings))
+    result = ic.report(text=body.text or None)
+    return _report_payload(result, c)
+
+
+def _transcode_to_pcm16(raw: bytes, rate: int = 16000) -> bytes:
+    """Decode any browser audio blob (typically WebM/Opus) to headerless 16kHz
+    mono signed-16-bit PCM, exactly what the Riva LINEAR_PCM stream expects."""
+    if shutil.which("ffmpeg") is None:
+        raise HTTPException(
+            status_code=503,
+            detail="ffmpeg not found on the server; cannot decode mic audio.")
+    proc = subprocess.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", "pipe:0",
+         "-ar", str(rate), "-ac", "1", "-f", "s16le", "pipe:1"],
+        input=raw, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if proc.returncode != 0 or not proc.stdout:
+        raise HTTPException(
+            status_code=400,
+            detail="could not decode the audio: "
+                   + proc.stderr.decode("utf-8", "ignore")[:300])
+    return proc.stdout
+
+
+@app.post("/api/report_audio")
+async def post_report_audio(audio: UploadFile = File(...), lang: str = "en-US"):
+    c = _controller()
+    transcriber = build_transcriber(c.settings)
+    if transcriber.__class__.__name__ == "NullTranscriber":
+        raise HTTPException(
+            status_code=503,
+            detail="ASR is disabled. Start the server with ASR_ENGINE=riva and "
+                   "RIVA_ENDPOINT set (or ASR_ENGINE=whisper).")
+    pcm = _transcode_to_pcm16(await audio.read())
+    ic = IntakeController(c, complete=_intake_complete(c.settings),
+                          transcriber=transcriber)
+    result = ic.report(audio=pcm, lang=lang)
+    return _report_payload(result, c)
 
 
 @app.get("/api/settings")
