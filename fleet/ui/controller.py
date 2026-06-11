@@ -219,6 +219,49 @@ class SimulationController:
         poly = self._leg_polyline(ctx['from_node'], ctx['to_node'], wade, use_base=True)
         return self._truncate_polyline(poly, ctx['frac_at_approval'])
 
+    def _edge_partial_paths(self, ctx: Dict, wade: float) -> Tuple[List[Tuple[float, float]], List[Tuple[float, float]]]:
+        """Return two polylines from the current mid-edge point: one back to the
+        edge's from_node, one forward to the to_node."""
+        poly = self._leg_polyline(ctx["from_node"], ctx["to_node"], wade, use_base=True)
+        if not poly:
+            return [], []
+        cur = _interp_polyline(poly, float(ctx["edge_frac"])) or poly[0]
+
+        prefix = [poly[0]]
+        segs = [math.hypot(poly[i+1][0]-poly[i][0], poly[i+1][1]-poly[i][1])
+                for i in range(len(poly)-1)]
+        total = sum(segs)
+        target = float(ctx["edge_frac"]) * total
+        acc = 0.0
+        for i, seg in enumerate(segs):
+            if acc + seg >= target:
+                prefix.append(cur)
+                suffix = [cur] + poly[i+1:]
+                return list(reversed(prefix)), suffix
+            acc += seg
+            prefix.append(poly[i+1])
+        return list(reversed(prefix)), [cur]
+
+    def _best_path_from_current_edge(self, ctx: Dict, target: str, wade: float) -> List[Tuple[float, float]]:
+        """Choose the cheaper branch from the current mid-edge point: reverse to
+        from_node or continue to to_node, then follow the road graph to target."""
+        edge = self.state.road_graph.get_edge(ctx["edge_id"])
+        if edge is None:
+            return []
+        edge_cost = edge.effective_time
+        back_cost = edge_cost * float(ctx["edge_frac"])
+        forward_cost = edge_cost * (1.0 - float(ctx["edge_frac"]))
+        from_dist = shortest_times_from(self.state.road_graph, ctx["from_node"], wade)
+        to_dist = shortest_times_from(self.state.road_graph, ctx["to_node"], wade)
+        via_from = back_cost + from_dist.get(target, float("inf"))
+        via_to = forward_cost + to_dist.get(target, float("inf"))
+        back_path, forward_path = self._edge_partial_paths(ctx, wade)
+        if via_from <= via_to:
+            tail = self._leg_polyline(ctx["from_node"], target, wade, use_base=False)
+            return back_path + tail[1:] if back_path and tail else back_path or tail
+        tail = self._leg_polyline(ctx["to_node"], target, wade, use_base=False)
+        return forward_path + tail[1:] if forward_path and tail else forward_path or tail
+
     def _has_pending_reroute(self, vehicle_id: str) -> bool:
         """True if there is a pending reroute/reschedule decision that includes
         this vehicle in its proposed_routes — used to decide which path to render."""
@@ -245,6 +288,20 @@ class SimulationController:
         wade = float(v.wade_capability)
         use_base = self._has_pending_reroute(v.id)
         out: List[List[float]] = []
+        vr = self.state.plan.get(v.id)
+        ctx = getattr(vr, "_reroute_context", None) if vr else None
+        stops = sorted(vr.stops, key=lambda s: s.sequence) if vr and vr.stops else []
+        first_unvisited = next((s for s in stops if s.actual_arrival is None), None)
+        if ctx and first_unvisited:
+            for lat, lng in self._best_path_from_current_edge(
+                    ctx, first_unvisited.customer_id, wade):
+                ll = [lng, lat]
+                if not out or out[-1] != ll:
+                    out.append(ll)
+            route_nodes = [first_unvisited.customer_id] + [
+                s.customer_id for s in stops
+                if s.actual_arrival is None and s.sequence > first_unvisited.sequence
+            ] + ["DEPOT"]
         for a, b in zip(route_nodes[:-1], route_nodes[1:]):
             for (lat, lng) in self._leg_polyline(a, b, wade, use_base=use_base):
                 ll = [lng, lat]
@@ -305,6 +362,15 @@ class SimulationController:
         from_node = visited[-1].customer_id if visited else "DEPOT"
         to_node = nxt.customer_id
         wade = float(v.wade_capability)
+        ctx = getattr(vr, "_reroute_context", None)
+        if ctx and not visited:
+            first_leg_min = float(ctx.get("first_leg_min") or 1.0)
+            from_time = ctx.get("approval_clock") or self.state.clock
+            span = max(1.0, first_leg_min) * 60.0
+            frac = max(0.0, min(1.0, (self.state.clock - from_time).total_seconds() / span))
+            pt = _interp_polyline(
+                self._best_path_from_current_edge(ctx, to_node, wade), frac)
+            return pt or default
         # Use effective leg time for span: when a traffic jam raises effective_time
         # 10× the vehicle visually crawls along the road at 1/10th speed.
         eff_leg_min = max(1.0, shortest_times_from(
@@ -471,58 +537,30 @@ class SimulationController:
                     visited = sorted(
                         [s for s in new_vr.stops if s.actual_arrival is not None],
                         key=lambda s: s.sequence)
-                    from_node = visited[-1].customer_id if visited else "DEPOT"
                     v = self.state.get_vehicle(vid)
                     wade = float(v.wade_capability) if v else 0.3
-                    dist = shortest_times_from(self.state.road_graph, from_node, wade)
-                    leg_min = dist.get(unvisited[0].customer_id, 1.0)
-                    
-                    is_driving = False
-                    if visited:
-                        last = visited[-1]
-                        if last.actual_departure and self.state.clock >= last.actual_departure:
-                            is_driving = True
-                    # No visited stops → vehicle at/near DEPOT, allow full re-plan
+                    ctx = getattr(new_vr, "_reroute_context", None)
+                    if ctx:
+                        leg_min = float(ctx.get("first_leg_min") or 1.0)
+                        ctx["approval_clock"] = self.state.clock
+                        setattr(new_vr, "_reroute_context", ctx)
+                        target_arrival = self.state.clock + timedelta(minutes=leg_min)
+                    else:
+                        from_node = visited[-1].customer_id if visited else "DEPOT"
+                        dist = shortest_times_from(self.state.road_graph, from_node, wade)
+                        leg_min = dist.get(unvisited[0].customer_id, 1.0)
+                        target_arrival = self.state.clock + timedelta(minutes=leg_min)
+                        if not visited:
+                            new_vr.start_time = self.state.clock
 
-                    if not is_driving:
-                        ret_min = 0.0
-                        if not visited and new_vr.start_time and new_vr.start_time < self.state.clock:
-                            # Vehicle left DEPOT but hasn't visited any customer yet.
-                            # Calculate how far along the original DEPOT->first_stop it is
-                            # and store a return context so it animates back to DEPOT.
-                            old_vr = self.state.plan.get(vid)
-                            if old_vr and old_vr.stops and old_vr.start_time:
-                                old_unv = sorted(
-                                    [s for s in old_vr.stops if s.actual_arrival is None],
-                                    key=lambda s: s.sequence)
-                                if old_unv:
-                                    old_to = old_unv[0].customer_id
-                                    eff = max(1.0, shortest_times_from(
-                                        self.state.road_graph, "DEPOT", wade).get(old_to, 1.0))
-                                    frac = max(0.0, min(1.0, (
-                                        self.state.clock - old_vr.start_time
-                                    ).total_seconds() / (eff * 60.0)))
-                                    if frac > 0.005:
-                                        ret_eff = max(0.5, shortest_times_from(
-                                            self.state.road_graph, old_to, wade).get("DEPOT", 1.0))
-                                        ret_min = frac * ret_eff
-                                        self._return_context[vid] = {
-                                            'from_node': "DEPOT", 'to_node': old_to,
-                                            'frac_at_approval': frac,
-                                            'approval_clock': self.state.clock,
-                                            'return_duration_min': ret_min,
-                                        }
-                        new_vr.start_time = self.state.clock + timedelta(minutes=ret_min)
-                        target_arrival = self.state.clock + timedelta(minutes=ret_min + leg_min)
-
-                        if unvisited[0].planned_arrival is not None:
-                            shift = target_arrival - unvisited[0].planned_arrival
-                            if abs(shift.total_seconds()) > 1:
-                                for s in unvisited:
-                                    if s.planned_arrival is not None:
-                                        s.planned_arrival += shift
-                                    if s.planned_departure is not None:
-                                        s.planned_departure += shift
+                    if unvisited[0].planned_arrival is not None:
+                        shift = target_arrival - unvisited[0].planned_arrival
+                        if abs(shift.total_seconds()) > 1:
+                            for s in unvisited:
+                                if s.planned_arrival is not None:
+                                    s.planned_arrival += shift
+                                if s.planned_departure is not None:
+                                    s.planned_departure += shift
                 self.state.plan.update(proposed_plan)
             else:
                 # Fallback: full re-solve (e.g. REPRIORITIZE / REALLOCATE)
