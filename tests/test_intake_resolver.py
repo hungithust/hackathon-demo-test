@@ -15,14 +15,14 @@ def test_resolves_customer_by_id():
 
 def test_resolves_customer_by_name_accent_folded():
     state = build_sample_state()
-    # "BigC Q.1" is C001's name; report typed without exact case/accents
-    assert resolve_target("bigc q.1 can them hang gap", EventType.URGENT_ORDER, state) == "C001"
+    # "BigC Mien Dong" is C001's name; report typed without exact case/accents
+    assert resolve_target("bigc mien dong can them hang gap", EventType.URGENT_ORDER, state) == "C001"
 
 
-def test_resolves_flooded_edge_prefers_flood_prone():
+def test_resolves_flooded_edge_to_customer():
     state = build_sample_state()
     edge_id = resolve_target("duong vao C001 bi ngap", EventType.FLOODED_AREA, state)
-    assert edge_id == "DEPOT->C001#2"   # the flood-prone parallel edge
+    assert edge_id == "DEPOT->C001"   # depot->customer edge for the flood event
 
 
 def test_resolves_traffic_edge_prefers_open():

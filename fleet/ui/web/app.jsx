@@ -67,6 +67,13 @@ function App() {
     return res; // { raw, reports, decisions, state }
   };
 
+  const onReportAudio = async (blob) => {
+    const res = await Api.reportAudio(blob);
+    apply(res.state);
+    if (res.decisions && res.decisions.length) setQueueView("pending");
+    return res;
+  };
+
   return (
     <div className="app">
       <header className="header">
@@ -100,7 +107,7 @@ function App() {
 
         <div className="col">
           <ApprovalQueue state={state} onApprove={onApprove} onReject={onReject} view={queueView} setView={setQueueView}/>
-          <VoicePanel onReport={onReport} clock={state.clock}/>
+          <VoicePanel onReport={onReport} onReportAudio={onReportAudio} clock={state.clock}/>
         </div>
       </div>
       <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)}

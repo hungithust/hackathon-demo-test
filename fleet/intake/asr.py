@@ -78,12 +78,29 @@ class RivaTranscriber:
 
         auth = riva.client.Auth(uri=endpoint)
         asr = riva.client.ASRService(auth)
+        # The Parakeet ASR NIM deploys a *streaming* model only; offline_recognize
+        # has no matching model ("Unavailable model ... type=offline"). Stream the
+        # audio in chunks instead. sample_rate must match the input (16kHz mono PCM).
+        sample_rate = int(getattr(self.settings, "riva_sample_rate", 16000) or 16000)
+        chunk_bytes = 4800 * 2  # ~150ms of 16kHz mono int16
 
         def fn(audio: bytes, lang: str) -> str:
-            config = riva.client.RecognitionConfig(language_code=lang,
-                                                   max_alternatives=1)
-            resp = asr.offline_recognize(audio, config)
-            return " ".join(r.alternatives[0].transcript
-                            for r in resp.results).strip()
+            config = riva.client.RecognitionConfig(
+                encoding=riva.client.AudioEncoding.LINEAR_PCM,
+                sample_rate_hertz=sample_rate,
+                language_code=lang,
+                max_alternatives=1,
+                enable_automatic_punctuation=True,
+            )
+            streaming_config = riva.client.StreamingRecognitionConfig(
+                config=config, interim_results=False)
+            chunks = (audio[i:i + chunk_bytes]
+                      for i in range(0, len(audio), chunk_bytes))
+            responses = asr.streaming_response_generator(
+                audio_chunks=chunks, streaming_config=streaming_config)
+            parts = [r.alternatives[0].transcript
+                     for resp in responses for r in resp.results
+                     if r.is_final and r.alternatives]
+            return " ".join(parts).strip()
 
         return fn
