@@ -5,7 +5,6 @@ Keeps the loop/agent decoupled from the optimizer impl: they call plan_routes
 with whichever RouteOptimizer the factory selected."""
 
 import datetime
-import heapq
 from typing import List, Tuple, Dict, Optional
 
 from fleet.contracts.state import WorldState, VehicleRoute, Stop
@@ -13,168 +12,7 @@ from fleet.contracts.interfaces import RouteOptimizer
 from fleet.routing.matrix import (
     build_routing_problem, shortest_times_from, build_time_matrix,
     build_multi_route_matrices, ROUTE_PROFILES,
-    shortest_path_edges, INF,
 )
-
-
-_VIRTUAL_POS_PREFIX = "__POS_"
-_REROUTE_CONGESTION_FACTOR = 100.0
-
-
-def _edge_cost(edge, extra_congestion_factor: float = 1.0) -> float:
-    cost = edge.effective_time
-    from fleet.contracts.state import EdgeStatus
-    if edge.status == EdgeStatus.CONGESTED:
-        cost *= extra_congestion_factor
-    return cost
-
-
-def _shortest_times_from_with_congestion(graph, source: str, wade: float,
-                                         extra_congestion_factor: float) -> Dict[str, float]:
-    dist: Dict[str, float] = {source: 0.0}
-    pq: List = [(0.0, source)]
-    while pq:
-        d, u = heapq.heappop(pq)
-        if d > dist.get(u, INF):
-            continue
-        for edge in graph.out_edges(u):
-            if not edge.is_passable(wade):
-                continue
-            nd = d + _edge_cost(edge, extra_congestion_factor)
-            if nd < dist.get(edge.to_node, INF):
-                dist[edge.to_node] = nd
-                heapq.heappush(pq, (nd, edge.to_node))
-    return dist
-
-
-def _current_edge_context(state: WorldState, vehicle_id: str,
-                          depot_id: str = "DEPOT") -> Optional[Dict]:
-    """Approximate the vehicle's current position as a fraction along the road
-    edge it is driving on. The planned leg may cross junction nodes; we locate
-    the concrete edge by walking the original base-time path."""
-    vehicle = state.get_vehicle(vehicle_id)
-    route = state.plan.get(vehicle_id)
-    if not vehicle or not route or not route.stops:
-        return None
-
-    stops = sorted(route.stops, key=lambda s: s.sequence)
-    visited = [s for s in stops if s.actual_arrival is not None]
-    nxt = next((s for s in stops if s.actual_arrival is None), None)
-    if nxt is None:
-        return None
-
-    if visited:
-        last = visited[-1]
-        if not last.actual_departure or state.clock <= last.actual_departure:
-            return None
-        from_node = last.customer_id
-        depart_time = last.actual_departure
-    else:
-        if not route.start_time or state.clock <= route.start_time:
-            return None
-        from_node = depot_id
-        depart_time = route.start_time
-
-    to_node = nxt.customer_id
-    wade = float(vehicle.wade_capability)
-    path_edges = shortest_path_edges(state.road_graph, from_node, to_node, wade, use_base=True)
-    if not path_edges:
-        return None
-
-    weights = []
-    current_path_minutes = 0.0
-    for eid in path_edges:
-        edge = state.road_graph.get_edge(eid)
-        if edge is not None:
-            weights.append((edge, max(0.001, edge.base_time_minutes)))
-            current_path_minutes += max(0.001, _edge_cost(edge, 1.0))
-    total = sum(w for _, w in weights)
-    if total <= 0 or current_path_minutes <= 0:
-        return None
-
-    elapsed_min = max(0.0, (state.clock - depart_time).total_seconds() / 60.0)
-    leg_frac = max(0.0, min(0.999, elapsed_min / current_path_minutes))
-    if leg_frac <= 0.0:
-        return None
-
-    target = leg_frac * total
-    acc = 0.0
-    for edge, weight in weights:
-        if acc + weight >= target:
-            edge_frac = (target - acc) / weight
-            return {
-                "edge_id": edge.id,
-                "from_node": edge.from_node,
-                "to_node": edge.to_node,
-                "edge_frac": max(0.0, min(0.999, edge_frac)),
-                "leg_from": from_node,
-                "leg_to": to_node,
-                "depart_time": depart_time,
-            }
-        acc += weight
-    edge = weights[-1][0]
-    return {
-        "edge_id": edge.id,
-        "from_node": edge.from_node,
-        "to_node": edge.to_node,
-        "edge_frac": 0.999,
-        "leg_from": from_node,
-        "leg_to": to_node,
-        "depart_time": depart_time,
-    }
-
-
-def _virtual_position_times(state: WorldState, ctx: Dict, locations: List[str],
-                            wade: float,
-                            extra_congestion_factor: float = _REROUTE_CONGESTION_FACTOR
-                            ) -> Dict[str, float]:
-    edge = state.road_graph.get_edge(ctx["edge_id"])
-    if edge is None:
-        return {}
-    edge_minutes = _edge_cost(edge, 1.0)
-    back_cost = edge_minutes * float(ctx["edge_frac"])
-    forward_cost = edge_minutes * (1.0 - float(ctx["edge_frac"]))
-    from_dist = _shortest_times_from_with_congestion(
-        state.road_graph, ctx["from_node"], wade, extra_congestion_factor)
-    to_dist = _shortest_times_from_with_congestion(
-        state.road_graph, ctx["to_node"], wade, extra_congestion_factor)
-
-    out = {_VIRTUAL_POS_PREFIX: 0.0}
-    for loc in locations:
-        if loc.startswith(_VIRTUAL_POS_PREFIX):
-            continue
-        best = INF
-        if loc == ctx["from_node"]:
-            best = min(best, back_cost)
-        if loc == ctx["to_node"]:
-            best = min(best, forward_cost)
-        if loc in from_dist:
-            best = min(best, back_cost + from_dist[loc])
-        if loc in to_dist:
-            best = min(best, forward_cost + to_dist[loc])
-        out[loc] = best
-    return out
-
-
-def _build_virtual_start_matrix(state: WorldState, locations: List[str],
-                                virtual_loc: str, ctx: Dict, wade: float,
-                                extra_congestion_factor: float = _REROUTE_CONGESTION_FACTOR
-                                ) -> List[List[float]]:
-    n = len(locations)
-    pos = {loc: i for i, loc in enumerate(locations)}
-    matrix = [[INF] * n for _ in range(n)]
-    for i, src in enumerate(locations):
-        matrix[i][i] = 0.0
-        if src == virtual_loc:
-            dist = _virtual_position_times(
-                state, ctx, locations, wade, extra_congestion_factor)
-        else:
-            dist = _shortest_times_from_with_congestion(
-                state.road_graph, src, wade, extra_congestion_factor)
-        for loc, t in dist.items():
-            if loc in pos:
-                matrix[i][pos[loc]] = t
-    return matrix
 
 
 def _build_plan(state: WorldState, optimizer: RouteOptimizer,
@@ -336,15 +174,22 @@ def build_reroute_problem_for_vehicle(
 
     visited = sorted([s for s in vr.stops if s.actual_arrival is not None],
                      key=lambda s: s.sequence)
-    unvisited = sorted([s for s in vr.stops if s.actual_arrival is None],
-                       key=lambda s: s.sequence)
+    unvisited = [s for s in vr.stops if s.actual_arrival is None]
     if not unvisited:
         return None
 
-    current_ctx = _current_edge_context(state, vehicle_id, depot_id)
-    if current_ctx is not None:
-        current_loc = f"{_VIRTUAL_POS_PREFIX}{vehicle_id}"
-        avail_time = state.clock
+    is_driving = False
+    if visited:
+        last = visited[-1]
+        if last.actual_departure and state.clock >= last.actual_departure:
+            is_driving = True
+    # No visited stops → vehicle still at/near DEPOT, allow full re-plan from DEPOT
+
+    if is_driving:
+        locked_stop = unvisited[0]
+        current_loc = locked_stop.customer_id
+        avail_time = max(locked_stop.planned_departure, state.clock)
+        unvisited = unvisited[1:]
     else:
         if visited:
             current_loc = visited[-1].customer_id
@@ -358,7 +203,7 @@ def build_reroute_problem_for_vehicle(
     if not unvisited:
         return None
 
-    # Locations list: [current position] + unvisited customers + DEPOT (return point)
+    # Locations list: [current_loc] + unvisited customers + DEPOT (return point)
     locs: List[str] = [current_loc]
     for s in unvisited:
         if s.customer_id not in locs:
@@ -368,18 +213,13 @@ def build_reroute_problem_for_vehicle(
 
     wade = float(vehicle.wade_capability)
 
-    # Single high-avoidance matrix: 100x extra cost on congested edges forces the
-    # solver to route around traffic jams. If the vehicle is already mid-edge, row
-    # 0 is CPU-built from that exact position: current -> edge.from and current ->
-    # edge.to are charged by the traveled/remaining fraction of that edge.
-    matrix = (
-        _build_virtual_start_matrix(state, locs, current_loc, current_ctx, wade)
-        if current_ctx is not None
-        else build_time_matrix(
-            state.road_graph, locs, wade,
-            extra_congestion_factor=_REROUTE_CONGESTION_FACTOR)
-    )
-    time_matrix = {f"{vehicle.veh_type}_reroute": matrix}
+    # Single high-avoidance matrix: 100x extra cost on congested edges forces
+    # the solver to route around traffic jams/flooded areas rather than through them.
+    # Multi-profile approach was flawed: cuOpt always chose profile-0 (lowest cost).
+    time_matrix = {
+        f"{vehicle.veh_type}_reroute": build_time_matrix(
+            state.road_graph, locs, wade, extra_congestion_factor=100.0)
+    }
 
     tasks = []
     total_demand = 0.0
@@ -414,16 +254,13 @@ def build_reroute_problem_for_vehicle(
         )
     ]
 
-    problem = RoutingProblem(
+    return RoutingProblem(
         locations=locs,
         depot_id=depot_id,
         time_matrix=time_matrix,
         fleet=fleet,
         tasks=tasks,
     )
-    if current_ctx is not None:
-        setattr(problem, "_current_edge_context", current_ctx)
-    return problem
 
 
 def preview_reroute_affected(
@@ -446,14 +283,7 @@ def preview_reroute_affected(
             continue
 
         try:
-            # Current-position reroute problems use a synthetic start node whose
-            # first row is custom-built on CPU. Keep this tiny branch local rather
-            # than sending a four-option matrix to cuOpt.
-            if getattr(problem, "_current_edge_context", None) is not None:
-                from fleet.routing.cpu_solver import CpuSolver
-                solution = CpuSolver().solve(problem)
-            else:
-                solution = optimizer.solve(problem)
+            solution = optimizer.solve(problem)
         except Exception as exc:
             print(f"[reroute_affected] solver error for {vid}: {exc}")
             continue
@@ -478,28 +308,37 @@ def preview_reroute_affected(
         unvisited = sorted([s for s in vr.stops if s.actual_arrival is None],
                            key=lambda s: s.sequence)
 
-        current_ctx = getattr(problem, "_current_edge_context", None)
-        offset = len(visited)
+        is_driving = False
+        if visited:
+            last = visited[-1]
+            if last.actual_departure and state.clock >= last.actual_departure:
+                is_driving = True
+        # No visited stops → vehicle still at/near DEPOT, allow full re-plan
+
+        locked_stops = []
+        if is_driving and unvisited:
+            locked_stops = [unvisited[0]]
+
+        offset = len(visited) + len(locked_stops)
 
         # Re-timestamp: walk stops in merged order, computing actual leg times
         # from the previous location using the most avoidant matrix (factor=100).
-        current_loc = problem.fleet[0].start_location or (
+        current_loc = locked_stops[0].customer_id if locked_stops else (
             visited[-1].customer_id if visited else depot_id)
-        current_time = max(problem.fleet[0].shift_start, state.clock)
-        loc_index = {loc: i for i, loc in enumerate(problem.locations)}
-        mat = problem.time_matrix[problem.fleet[0].veh_type]
+        current_time = max(
+            locked_stops[0].planned_departure if locked_stops else (
+                visited[-1].actual_departure
+                if visited and visited[-1].actual_departure
+                else (visited[-1].actual_arrival + datetime.timedelta(minutes=10.0)
+                      if visited else problem.fleet[0].shift_start)
+            ),
+            state.clock,
+        )
 
         new_stops: List[Stop] = []
         for k, ss in enumerate(merged_solved, start=1):
-            if current_loc in loc_index and ss.customer_id in loc_index:
-                leg_min = mat[loc_index[current_loc]][loc_index[ss.customer_id]]
-                if leg_min == INF:
-                    leg_min = 1.0
-            else:
-                dist = _shortest_times_from_with_congestion(
-                    state.road_graph, current_loc, wade,
-                    _REROUTE_CONGESTION_FACTOR)
-                leg_min = dist.get(ss.customer_id, 1.0)
+            dist = shortest_times_from(state.road_graph, current_loc, wade)
+            leg_min = dist.get(ss.customer_id, 1.0)
             arrival = current_time + datetime.timedelta(minutes=leg_min)
             c = state.customers.get(ss.customer_id)
             svc = float(getattr(c, "service_time_min", 10.0)) if c else 10.0
@@ -515,35 +354,18 @@ def preview_reroute_affected(
             current_loc = ss.customer_id
             current_time = departure
 
-        if current_loc in loc_index and depot_id in loc_index:
-            last_leg_min = mat[loc_index[current_loc]][loc_index[depot_id]]
-            if last_leg_min == INF:
-                last_leg_min = 0.0
-        else:
-            last_leg_min = _shortest_times_from_with_congestion(
-                state.road_graph, current_loc, wade,
-                _REROUTE_CONGESTION_FACTOR).get(depot_id, 0.0)
+        last_leg_min = shortest_times_from(
+            state.road_graph, current_loc, wade).get(depot_id, 0.0)
 
-        new_route = VehicleRoute(
+        proposed[vid] = VehicleRoute(
             vehicle_id=vid,
-            stops=visited + new_stops,
+            stops=visited + locked_stops + new_stops,
             total_time=solution.metrics.get("total_time_min", 0.0),
             start_time=vr.start_time,
             end_time=(new_stops[-1].planned_departure
                       + datetime.timedelta(minutes=last_leg_min))
                      if new_stops else vr.end_time,
         )
-        if current_ctx is not None:
-            setattr(new_route, "_reroute_context", {
-                **current_ctx,
-                "approval_clock": state.clock,
-                "virtual_location": problem.fleet[0].start_location,
-                "first_leg_min": (
-                    mat[loc_index[problem.fleet[0].start_location]][loc_index[new_stops[0].customer_id]]
-                    if new_stops else 0.0
-                ),
-            })
-        proposed[vid] = new_route
 
     return all_dropped, proposed
 

@@ -5,121 +5,6 @@
 const VB_W = 1000, VB_H = 680;
 const mapRange = (v, a, b, c, d) => c + ((v - a) / (b - a || 1)) * (d - c);
 
-// ---- road-following marker animation -------------------------------------
-// Backend snapshots already give an on-road (lat,lng) every tick; the bug was
-// the marker CSS-tweening in a STRAIGHT LINE between two snapshots, so any
-// large single-snapshot move (Step-5, a reroute that switches legs) made the
-// truck fly across the map. We instead walk the marker ALONG its route
-// polyline by arc-length, and snap (no glide) when a move can't follow a road.
-function polyCumLengths(pts) {
-  const lens = [0];
-  for (let i = 1; i < pts.length; i++) {
-    lens.push(lens[i - 1] + Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y));
-  }
-  return lens;
-}
-function pointAtLen(pts, lens, d) {
-  const total = lens[lens.length - 1];
-  if (d <= 0 || total <= 0) return pts[0];
-  if (d >= total) return pts[pts.length - 1];
-  for (let i = 1; i < pts.length; i++) {
-    if (lens[i] >= d) {
-      const seg = lens[i] - lens[i - 1];
-      const t = seg > 0 ? (d - lens[i - 1]) / seg : 0;
-      return { x: pts[i - 1].x + (pts[i].x - pts[i - 1].x) * t,
-               y: pts[i - 1].y + (pts[i].y - pts[i - 1].y) * t };
-    }
-  }
-  return pts[pts.length - 1];
-}
-// nearest arc-length of `pt` projected onto the polyline; also its distance.
-function projectArcLen(pts, lens, pt) {
-  let best = { len: 0, dist: Infinity };
-  for (let i = 1; i < pts.length; i++) {
-    const ax = pts[i - 1].x, ay = pts[i - 1].y;
-    const dx = pts[i].x - ax, dy = pts[i].y - ay;
-    const seg2 = dx * dx + dy * dy;
-    let t = seg2 > 0 ? ((pt.x - ax) * dx + (pt.y - ay) * dy) / seg2 : 0;
-    t = Math.max(0, Math.min(1, t));
-    const px = ax + dx * t, py = ay + dy * t;
-    const dist = Math.hypot(pt.x - px, pt.y - py);
-    if (dist < best.dist) best = { len: lens[i - 1] + t * Math.sqrt(seg2), dist };
-  }
-  return best;
-}
-
-const ON_ROUTE_TOL = 40;   // user-units: target counts as "on its route" within this
-const SNAP_CLAMP = 60;     // off-route straight move beyond this snaps instead of gliding
-
-function VehicleMarker({ v, project, duration, selected, onSelect, setTip }) {
-  const gRef = React.useRef(null);
-  const posRef = React.useRef(null);   // last rendered pixel position
-  const animRef = React.useRef(0);
-
-  const target = project(v.lat, v.lng);
-  const pts = (v.route_path && v.route_path.length >= 2)
-    ? v.route_path.map(([lng, lat]) => project(lat, lng)) : null;
-
-  React.useEffect(() => {
-    if (!posRef.current) posRef.current = { ...target };   // first mount: snap
-    const start = { ...posRef.current };
-    cancelAnimationFrame(animRef.current);
-
-    let frame = null;   // p(0..1) -> {x,y}
-    if (pts) {
-      const lens = polyCumLengths(pts);
-      const b = projectArcLen(pts, lens, target);
-      if (b.dist < ON_ROUTE_TOL) {           // target sits on this route → follow road
-        const a = projectArcLen(pts, lens, start);
-        const sLen = a.dist < SNAP_CLAMP ? a.len : b.len;   // off-path start → no backward fly
-        frame = (p) => pointAtLen(pts, lens, sLen + (b.len - sLen) * p);
-      }
-    }
-    if (!frame) {
-      const straight = Math.hypot(target.x - start.x, target.y - start.y);
-      if (straight > SNAP_CLAMP) {            // can't follow a road & it's far → snap, never glide
-        posRef.current = { ...target };
-        if (gRef.current) gRef.current.style.transform = `translate(${target.x}px,${target.y}px)`;
-        return;
-      }
-      frame = (p) => ({ x: start.x + (target.x - start.x) * p,
-                        y: start.y + (target.y - start.y) * p });
-    }
-
-    const t0 = performance.now();
-    const dur = Math.max(120, duration);
-    const stepFn = (now) => {
-      const p = Math.min(1, (now - t0) / dur);
-      const pt = frame(p);
-      posRef.current = pt;
-      if (gRef.current) gRef.current.style.transform = `translate(${pt.x}px,${pt.y}px)`;
-      if (p < 1) animRef.current = requestAnimationFrame(stepFn);
-    };
-    animRef.current = requestAnimationFrame(stepFn);
-    return () => cancelAnimationFrame(animRef.current);
-  }, [v.lat, v.lng, duration]);
-
-  const vs = VEHICLE_STATUS[v.status] || VEHICLE_STATUS.at_depot;
-  const col = vs.color;
-  const broken = v.status === "broken";
-  const init = posRef.current || target;
-  return (
-    <g ref={gRef} style={{ transform: `translate(${init.x}px,${init.y}px)`, cursor: "pointer" }}
-       onClick={() => onSelect(selected ? null : v.id)}
-       onMouseEnter={() => setTip({ id: v.id, color: col,
-         rows: [["Status", vs.label], ["Heading to", v.leg_to], ["Load", v.load_pct + "%"]] })}
-       onMouseLeave={() => setTip(null)}>
-      {broken && <circle r="16" fill="#FF4D5E" opacity=".22" className="evt-pulse"/>}
-      {selected && <circle r="15" fill="none" stroke={col} strokeWidth="1.6" opacity=".8"/>}
-      <rect x="-9" y="-9" width="18" height="18" rx="5" fill={col} stroke="#ffffff" strokeWidth="1.6" style={{ filter: "drop-shadow(0 2px 3px rgba(0,0,0,0.2))" }}/>
-      <g transform="translate(-6,-6) scale(.5)" stroke="#ffffff" strokeWidth="2.6" fill="none" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M3 7h11v8H3zM14 10h4l3 3v2h-7"/><circle cx="6.5" cy="17" r="1.6"/><circle cx="17.5" cy="17" r="1.6"/>
-      </g>
-      <text x="0" y="22" textAnchor="middle" className="veh-marker" fill={col} style={{ fontFamily: "var(--mono)", fontSize: 8.5, fontWeight: 600 }}>{v.id}</text>
-    </g>
-  );
-}
-
 function MapTip({ tip, mouse }) {
   if (!tip) return null;
   return (
@@ -453,12 +338,29 @@ function DispatchMap({ state, speed = 2, selectedVeh, onSelectVeh, selectedEvent
           <text className="node-label" x="0" y="-18" textAnchor="middle" fill="#d97706" style={{ fontWeight: 600, fontSize: 11 }}>DEPOT</text>
         </g>
 
-        {/* vehicles — animate along the route polyline (no straight-line teleport) */}
-        {state.vehicles.map((v) => (
-          <VehicleMarker key={v.id} v={v} project={project}
-            duration={SPEED_MS[speed] || 1100}
-            selected={selectedVeh === v.id} onSelect={onSelectVeh} setTip={setTip}/>
-        ))}
+        {/* vehicles */}
+        {state.vehicles.map((v) => {
+          const p = project(v.lat, v.lng);
+          const vs = VEHICLE_STATUS[v.status] || VEHICLE_STATUS.at_depot;
+          const col = vs.color;
+          const broken = v.status === "broken";
+          const sel = selectedVeh === v.id;
+          return (
+            <g key={v.id} style={{ transform: `translate(${p.x}px,${p.y}px)`, transition: `transform ${SPEED_MS[speed] || 1100}ms linear`, cursor: "pointer" }}
+               onClick={() => onSelectVeh(sel ? null : v.id)}
+               onMouseEnter={() => setTip({ id: v.id, color: col,
+                 rows: [["Status", vs.label], ["Heading to", v.leg_to], ["Load", v.load_pct + "%"]] })}
+               onMouseLeave={() => setTip(null)}>
+              {broken && <circle r="16" fill="#FF4D5E" opacity=".22" className="evt-pulse"/>}
+              {sel && <circle r="15" fill="none" stroke={col} strokeWidth="1.6" opacity=".8"/>}
+              <rect x="-9" y="-9" width="18" height="18" rx="5" fill={col} stroke="#ffffff" strokeWidth="1.6" style={{ filter: "drop-shadow(0 2px 3px rgba(0,0,0,0.2))" }}/>
+              <g transform="translate(-6,-6) scale(.5)" stroke="#ffffff" strokeWidth="2.6" fill="none" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M3 7h11v8H3zM14 10h4l3 3v2h-7"/><circle cx="6.5" cy="17" r="1.6"/><circle cx="17.5" cy="17" r="1.6"/>
+              </g>
+              <text x="0" y="22" textAnchor="middle" className="veh-marker" fill={col} style={{ fontFamily: "var(--mono)", fontSize: 8.5, fontWeight: 600 }}>{v.id}</text>
+            </g>
+          );
+        })}
         </g>
       </svg>
 

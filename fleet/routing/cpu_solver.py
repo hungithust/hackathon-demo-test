@@ -203,10 +203,9 @@ class CpuSolver:
                     solution.Value(time_dim.CumulVar(routing.End(vehicle_id)))
                     - solution.Value(time_dim.CumulVar(routing.Start(vehicle_id))))
 
-        task_ids = {t.customer_id for t in problem.tasks}
         dropped = []
         for i in range(len(problem.locations)):
-            if i == depot or problem.locations[i] not in task_ids:
+            if i == depot:
                 continue
             index = manager.NodeToIndex(i)
             if solution.Value(routing.NextVar(index)) == index:
