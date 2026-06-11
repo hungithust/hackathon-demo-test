@@ -90,11 +90,41 @@ class SimulationController:
                 
             pts.append((lat2, lng2))
             geom[edge.id] = pts
-            
+
             # Reverse edge
             rev_id = f"{edge.to_node}->{edge.from_node}"
             geom[rev_id] = list(reversed(pts))
-            
+
+        # --- W001 detour: make it read cleanly on the map ----------------------
+        # The synthetic offsets above would draw DEPOT->W001 as its own squiggle,
+        # making it look like a second depot->C001 road. Instead overlay DEPOT->W001
+        # on the first ~80% of the real DEPOT->C001 road, and turn W001->C001 into a
+        # visible arc that branches OFF near the jam — the actual "đường vòng".
+        rg_nodes = state.road_graph.nodes
+        if "W001" in rg_nodes and "DEPOT->C001" in geom:
+            main = geom["DEPOT->C001"]
+            cut = max(2, int(round(len(main) * 0.8)))
+            depot_to_w = main[:cut]
+            geom["DEPOT->W001"] = depot_to_w
+            geom["W001->DEPOT"] = list(reversed(depot_to_w))
+
+            # Anchor the arc at the actual road endpoint (= the W001 marker), not the
+            # straight node location, so the detour visibly connects to the road.
+            w_lat, w_lng = depot_to_w[-1]
+            cl = rg_nodes["C001"].location
+            dlat, dlng = cl.lat - w_lat, cl.lng - w_lng
+            length = math.hypot(dlat, dlng) or 1e-9
+            plat, plng = -dlng / length, dlat / length        # unit perpendicular
+            arc = []
+            steps = 8
+            for k in range(steps + 1):
+                tt = k / steps
+                bulge = math.sin(tt * math.pi) * length * 0.6  # taper to 0 at ends
+                arc.append((w_lat + dlat * tt + plat * bulge,
+                            w_lng + dlng * tt + plng * bulge))
+            geom["W001->C001"] = arc
+            geom["C001->W001"] = list(reversed(arc))
+
         return geom
 
     def _load_real_world(self):
@@ -230,20 +260,45 @@ class SimulationController:
                         return True
         return False
 
+    def _has_approved_reroute(self, vehicle_id: str) -> bool:
+        """True only when this vehicle has an APPROVED reroute for a still-active
+        disruption — the single condition under which it may leave its committed
+        road and follow the detour.
+
+        A reroute happens ONLY after human approval: while a decision is merely
+        pending (or was rejected, or auto-cancelled because the vehicle already
+        entered the jam) the vehicle must keep driving its original route through
+        the jam.  Scoping to active events means a new jam never inherits an old
+        approval — the vehicle stays on the new jammed road until that one is
+        approved too."""
+        from fleet.contracts.state import DecisionAction, ApprovalStatus
+        active_event_ids = {e.id for e in self.state.get_active_events()}
+        for d in self.state.decisions:
+            if (d.action in (DecisionAction.REROUTE, DecisionAction.RESCHEDULE)
+                    and d.approval_status == ApprovalStatus.APPROVED
+                    and d.event_id in active_event_ids
+                    and d.execution_result
+                    and vehicle_id in d.execution_result.get("proposed_routes", {})):
+                return True
+        return False
+
     def _route_path(self, v) -> List[List[float]]:
         """Whole planned route as one [[lng,lat]...] polyline along real roads.
 
-        While a reroute decision is pending: use base_time (ignores disruptions)
-        so the blue route stays on its original path through the affected area,
-        contrasting visibly with the green proposed-reroute overlay.
+        Until a reroute is APPROVED: use base_time (ignores disruptions) so the
+        blue route stays on its original committed road through the affected area,
+        contrasting visibly with the green proposed-reroute overlay. This holds
+        while the decision is pending, and also if it was rejected or auto-cancelled
+        because the vehicle already entered the jam (then it must finish on the
+        original route).
 
-        After approval (no pending decision): switch to effective_time so the
-        blue route follows the newly approved detour around the disruption."""
+        Only after approval (for a still-active disruption): switch to effective_time
+        so the blue route follows the approved detour around the disruption."""
         route_nodes = self._route_nodes(v.id)
         if len(route_nodes) < 2:
             return []
         wade = float(v.wade_capability)
-        use_base = self._has_pending_reroute(v.id)
+        use_base = not self._has_approved_reroute(v.id)
         out: List[List[float]] = []
         for a, b in zip(route_nodes[:-1], route_nodes[1:]):
             for (lat, lng) in self._leg_polyline(a, b, wade, use_base=use_base):
@@ -277,10 +332,18 @@ class SimulationController:
             else:
                 self._return_context.pop(v.id, None)
 
+        # Draw the moving icon along the SAME path geometry as the vehicle's route
+        # line (_route_path): base-time (original committed road) until the reroute
+        # is APPROVED, effective-time (passable, avoids floods/blocks) only once it
+        # is approved for a still-active disruption. Using "approved" (not merely
+        # "no longer pending") keeps the icon on the jammed road when the reroute is
+        # pending/rejected/auto-cancelled, instead of detouring without approval.
+        use_base = not self._has_approved_reroute(v.id)
+
         stops = sorted(vr.stops, key=lambda s: s.sequence)
         nxt = next((s for s in stops if s.actual_arrival is None), None)
         visited = [s for s in stops if s.actual_arrival is not None]
-        
+
         if nxt is None:
             # Route done (all stops visited). Is it back at depot?
             if v.pos == self.state.depot.location:
@@ -298,7 +361,7 @@ class SimulationController:
                 return default
             span = leg_min * 60.0
             frac = max(0.0, min(1.0, (self.state.clock - from_time).total_seconds() / span))
-            pt = _interp_polyline(self._leg_polyline(from_node, to_node, wade, use_base=True), frac)
+            pt = _interp_polyline(self._leg_polyline(from_node, to_node, wade, use_base=use_base), frac)
             return pt or default
 
         # Otherwise, en route to `nxt`
@@ -317,7 +380,7 @@ class SimulationController:
             from_time = nxt.planned_arrival - timedelta(minutes=eff_leg_min)
         span = eff_leg_min * 60.0
         frac = max(0.0, min(1.0, (self.state.clock - from_time).total_seconds() / span))
-        pt = _interp_polyline(self._leg_polyline(from_node, to_node, wade, use_base=True), frac)
+        pt = _interp_polyline(self._leg_polyline(from_node, to_node, wade, use_base=use_base), frac)
         return pt or default
 
     def _active_edge_ids(self) -> set:
@@ -358,7 +421,12 @@ class SimulationController:
                 {"id": e.id, "event_type": e.event_type.value,
                  "target": e.target, "severity": e.severity.value,
                  "started_at": e.started_at.isoformat(),
-                 "description": e.description}
+                 "description": e.description,
+                 # congested sub-segment fractions, so the map draws the red overlay
+                 # at the real jam location along the road (not the edge midpoint).
+                 **({"cong_start": ed.congestion_start_frac,
+                     "cong_end": ed.congestion_end_frac}
+                    if (ed := s.road_graph.get_edge(e.target)) is not None else {})}
                 for e in s.get_active_events()
             ],
             "decisions": {
@@ -398,6 +466,17 @@ class SimulationController:
             ],
             "depot": {"lat": s.depot.location.lat, "lng": s.depot.location.lng,
                       "name": s.depot.location.name},
+            # Road waypoints (detour junctions like W001) — drawn as their own
+            # markers so the detour point is visible, sitting on the road it splits.
+            "waypoints": [
+                {"id": nid,
+                 # sit the marker on the drawn DEPOT->nid road when geometry exists
+                 "lat": (self.geometry.get(f"DEPOT->{nid}") or [(n.location.lat, n.location.lng)])[-1][0],
+                 "lng": (self.geometry.get(f"DEPOT->{nid}") or [(n.location.lat, n.location.lng)])[-1][1],
+                 "name": n.location.name}
+                for nid, n in s.road_graph.nodes.items()
+                if nid not in s.customers and nid != "DEPOT" and nid.startswith("W")
+            ],
             "customers": [
                 {"id": c.id, "lat": c.location.lat, "lng": c.location.lng,
                  "name": c.location.name, "priority": c.priority,
@@ -418,32 +497,53 @@ class SimulationController:
 
     # ----- human-in-the-loop approval -----
     def _handle_sibling_decisions(self, primary_d, status):
-        """Auto-resolve the matching REROUTE decision on the reverse edge so the user
-        doesn't have to click twice for a bidirectional traffic jam."""
+        """Auto-resolve any other pending REROUTE decision on the SAME physical road
+        so the user doesn't have to click twice for a bidirectional / parallel-edge
+        disruption (loop.py now dedups these, but resolve any that slipped through:
+        e.g. queued before the dedup, or forward+reverse of one corridor)."""
         from fleet.contracts.state import DecisionAction
-        if primary_d.action == DecisionAction.REROUTE:
-            ev = next((e for e in self.state.events if e.id == primary_d.event_id), None)
-            if ev and "->" in ev.target:
-                a, b = ev.target.split("->")
-                sibling_target = f"{b}->{a}"
-                for other_d in self.state.get_pending_decisions():
-                    if other_d.id != primary_d.id and other_d.action == DecisionAction.REROUTE:
-                        o_ev = next((e for e in self.state.events if e.id == other_d.event_id), None)
-                        if o_ev and o_ev.target == sibling_target and o_ev.event_type == ev.event_type:
-                            other_d.approval_status = status
-                            other_d.approved_by = "auto-sibling"
-                            other_d.approved_at = self.state.clock
+        from fleet.loop import road_key
+        if primary_d.action != DecisionAction.REROUTE:
+            return
+        ev = next((e for e in self.state.events if e.id == primary_d.event_id), None)
+        if not ev or "->" not in ev.target:
+            return
+        key = road_key(ev.target)
+        for other_d in self.state.get_pending_decisions():
+            if other_d.id == primary_d.id or other_d.action != DecisionAction.REROUTE:
+                continue
+            o_ev = next((e for e in self.state.events if e.id == other_d.event_id), None)
+            if o_ev and "->" in o_ev.target and road_key(o_ev.target) == key:
+                other_d.approval_status = status
+                other_d.approved_by = "auto-sibling"
+                other_d.approved_at = self.state.clock
 
     def approve(self, decision_id: str):
         d = self._find_pending(decision_id)
 
-        # Extract pre-computed targeted plan before dispatcher.apply() overwrites
-        # execution_result.  The plan was computed per-vehicle (only affected
-        # vehicles) so we apply only those routes, leaving others unchanged.
+        # Re-solve the targeted reroute from each affected vehicle's CURRENT
+        # position.  The plan stored when the decision was queued
+        # (_proposed_plan) is stale: the vehicle keeps moving (and may visit more
+        # stops) while the decision waits in the approval queue, so applying that
+        # snapshot would rewind the vehicle's progress and send it back along the
+        # old route — it appears to ignore the reroute entirely.  Recomputing here
+        # reflects where the vehicle actually is now (and correctly skips a vehicle
+        # that has since entered the jam).  The stale snapshot is kept only as a
+        # fallback and still drives the green preview while the decision is pending.
         from fleet.contracts.state import DecisionAction
         proposed_plan = None
         if d.action in (DecisionAction.REROUTE, DecisionAction.RESCHEDULE):
-            proposed_plan = d.impact_estimate.get("_proposed_plan")
+            from fleet.loop import get_affected_vehicle_ids
+            from fleet.routing.planner import preview_reroute_affected
+            ev = next((e for e in self.state.events if e.id == d.event_id), None)
+            stale = d.impact_estimate.get("_proposed_plan") or {}
+            affected_vids = (get_affected_vehicle_ids(self.state, ev)
+                             if ev is not None else list(stale.keys()))
+            if affected_vids:
+                _, proposed_plan = preview_reroute_affected(
+                    self.state, self.components.optimizer, affected_vids)
+            if not proposed_plan:
+                proposed_plan = stale
 
         d.approval_status = ApprovalStatus.APPROVED
         d.approved_by = "human"
@@ -486,6 +586,7 @@ class SimulationController:
 
                     if not is_driving:
                         ret_min = 0.0
+                        same_first_leg = False
                         if not visited and new_vr.start_time and new_vr.start_time < self.state.clock:
                             # Vehicle left DEPOT but hasn't visited any customer yet.
                             # Calculate how far along the original DEPOT->first_stop it is
@@ -497,23 +598,31 @@ class SimulationController:
                                     key=lambda s: s.sequence)
                                 if old_unv:
                                     old_to = old_unv[0].customer_id
-                                    eff = max(1.0, shortest_times_from(
-                                        self.state.road_graph, "DEPOT", wade).get(old_to, 1.0))
-                                    frac = max(0.0, min(1.0, (
-                                        self.state.clock - old_vr.start_time
-                                    ).total_seconds() / (eff * 60.0)))
-                                    if frac > 0.005:
-                                        ret_eff = max(0.5, shortest_times_from(
-                                            self.state.road_graph, old_to, wade).get("DEPOT", 1.0))
-                                        ret_min = frac * ret_eff
-                                        self._return_context[vid] = {
-                                            'from_node': "DEPOT", 'to_node': old_to,
-                                            'frac_at_approval': frac,
-                                            'approval_clock': self.state.clock,
-                                            'return_duration_min': ret_min,
-                                        }
-                        new_vr.start_time = self.state.clock + timedelta(minutes=ret_min)
-                        target_arrival = self.state.clock + timedelta(minutes=ret_min + leg_min)
+                                    new_to = unvisited[0].customer_id
+                                    if old_to == new_to:
+                                        same_first_leg = True
+                                    else:
+                                        eff = max(1.0, shortest_times_from(
+                                            self.state.road_graph, "DEPOT", wade).get(old_to, 1.0))
+                                        frac = max(0.0, min(1.0, (
+                                            self.state.clock - old_vr.start_time
+                                        ).total_seconds() / (eff * 60.0)))
+                                        if frac > 0.005:
+                                            ret_eff = max(0.5, shortest_times_from(
+                                                self.state.road_graph, old_to, wade).get("DEPOT", 1.0))
+                                            ret_min = frac * ret_eff
+                                            self._return_context[vid] = {
+                                                'from_node': "DEPOT", 'to_node': old_to,
+                                                'frac_at_approval': frac,
+                                                'approval_clock': self.state.clock,
+                                                'return_duration_min': ret_min,
+                                            }
+                        if same_first_leg:
+                            new_vr.start_time = old_vr.start_time
+                            target_arrival = old_vr.start_time + timedelta(minutes=leg_min)
+                        else:
+                            new_vr.start_time = self.state.clock + timedelta(minutes=ret_min)
+                            target_arrival = self.state.clock + timedelta(minutes=ret_min + leg_min)
 
                         if unvisited[0].planned_arrival is not None:
                             shift = target_arrival - unvisited[0].planned_arrival

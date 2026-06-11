@@ -145,12 +145,17 @@ class WorldSimulator:
         heading towards so they reliably trigger reroute decisions in the demo.
         Floods affect a geographic zone (center edge + neighbouring edges)."""
         # Fixed demo jam: DEPOT→C001 congestion injected once at tick 120.
-        # Runs before the ON_ROUTE / tick-gate guards so it always fires.
+        # The jam covers only the LAST 7/8 of the edge (starts at fraction 0.125)
+        # so a vehicle that just left DEPOT can still turn around and reroute.
         if state.sim_tick == 120 and not getattr(self, "_depot_c001_jam_injected", False):
             depot_c001 = state.road_graph.get_edge("DEPOT->C001")
             if depot_c001 and depot_c001.status == EdgeStatus.OPEN:
+                # Jam in the last 1/8 of the road (near C001 side).
+                # Vehicles that haven't yet traveled 87.5% of the road can still reroute.
                 self.disrupt_edge(state, "DEPOT->C001", EdgeStatus.CONGESTED,
-                                  traffic_factor=10.0)
+                                  traffic_factor=10.0,
+                                  congestion_start_frac=0.875,
+                                  congestion_end_frac=1.0)
             self._depot_c001_jam_injected = True
 
         if not any(v.status == VehicleStatus.ON_ROUTE for v in state.vehicles.values()):
@@ -187,8 +192,15 @@ class WorldSimulator:
                         planned = self._collect_planned_next_edges(state)
                         pool = planned if planned else open_edges
                         edge = self.rng.choice(pool)
+                        # Random partial-jam segment: jam covers 1/4 to 3/4 of edge
+                        jam_len = self.rng.choice([0.25, 0.375, 0.5, 0.625, 0.75])
+                        max_start = 1.0 - jam_len
+                        cong_start = round(self.rng.uniform(0.0, max_start), 3)
+                        cong_end = round(min(1.0, cong_start + jam_len), 3)
                         self.disrupt_edge(state, edge.id, EdgeStatus.CONGESTED,
-                                          traffic_factor=10.0)
+                                          traffic_factor=10.0,
+                                          congestion_start_frac=cong_start,
+                                          congestion_end_frac=cong_end)
             self._last_accident_tick = state.sim_tick
 
     def inject_event(self, state: WorldState, event_type: EventType,
@@ -203,9 +215,14 @@ class WorldSimulator:
 
     def disrupt_edge(self, state: WorldState, edge_id: str,
                      new_status: EdgeStatus, flood_level: float = 0.0,
-                     traffic_factor: float = 1.0) -> Event:
+                     traffic_factor: float = 1.0,
+                     congestion_start_frac: float = 0.0,
+                     congestion_end_frac: float = 1.0) -> Event:
         """Mutate a road edge (block/flood/congest) and emit the matching event so
-        the detector + agent react and the loop's reroute path is exercised."""
+        the detector + agent react and the loop's reroute path is exercised.
+
+        congestion_start_frac / congestion_end_frac define the sub-segment of the
+        edge that is actually jammed (req 4).  Defaults cover the full edge."""
         edge = state.road_graph.get_edge(edge_id)
         if edge is None:
             raise KeyError(f"no such edge: {edge_id}")
@@ -215,6 +232,8 @@ class WorldSimulator:
             edge.flood_level = flood_level
         if traffic_factor != 1.0:
             edge.traffic_factor = traffic_factor
+        edge.congestion_start_frac = max(0.0, min(1.0, congestion_start_frac))
+        edge.congestion_end_frac = max(0.0, min(1.0, congestion_end_frac))
         evt_type = (EventType.FLOODED_AREA
                     if new_status == EdgeStatus.FLOODED
                     else EventType.TRAFFIC)

@@ -12,7 +12,21 @@ from fleet.dispatch.approval import should_auto_approve
 from fleet.dispatch.dispatcher import RESOLVE_ACTIONS
 from fleet.routing.planner import (
     plan_routes, reroute, plan_total_minutes, preview_reroute_affected,
+    _vehicle_in_jam,
 )
+
+
+def road_key(target: str):
+    """Normalise an event target to an undirected physical-road key so that the
+    two directions of a road and its parallel edges all map to the same value:
+      "A->B", "B->A", "A->B#2", "B->A#2"  ->  ("A", "B")
+    Non-edge targets (customer ids, SKUs, vehicle ids) are returned unchanged."""
+    if "->" not in target:
+        return target
+    a, b = target.split("->", 1)
+    a = a.split("#")[0]
+    b = b.split("#")[0]
+    return tuple(sorted((a, b)))
 
 
 def _reconcile_detected(state: WorldState, detected) -> None:
@@ -154,30 +168,68 @@ def run_loop(state: WorldState, components: Components, n_ticks: int,
 
         _reconcile_detected(state, components.detector.detect(state))
 
+        # Cancel pending reroutes if vehicles have already entered the jam
+        for d in state.get_pending_decisions():
+            from fleet.contracts.state import DecisionAction, ApprovalStatus
+            if d.action in (DecisionAction.REROUTE, DecisionAction.RESCHEDULE):
+                if d.execution_result and "proposed_routes" in d.execution_result:
+                    routes = d.execution_result["proposed_routes"]
+                    stale = d.impact_estimate.get("_proposed_plan", {})
+                    
+                    in_jam_vids = [vid for vid in routes.keys() if _vehicle_in_jam(state, vid)]
+                    if in_jam_vids:
+                        for vid in in_jam_vids:
+                            del routes[vid]
+                            if vid in stale:
+                                del stale[vid]
+                                
+                        parts = d.description.split(" — ")
+                        base_desc = parts[0]
+                        new_parts = []
+                        if routes:
+                            new_parts.append("reroute: " + ", ".join(sorted(routes.keys())))
+                        
+                        ev = next((e for e in state.events if e.id == d.event_id), None)
+                        if ev:
+                            affected_vids = get_affected_vehicle_ids(state, ev)
+                            in_jam = sorted(v for v in affected_vids if v not in routes and _vehicle_in_jam(state, v))
+                            if in_jam:
+                                new_parts.append("committed (in jam): " + ", ".join(in_jam))
+                        
+                        if new_parts:
+                            d.description = base_desc + " — " + " | ".join(new_parts)
+                        else:
+                            d.description = base_desc
+                            
+                        if not routes:
+                            d.approval_status = ApprovalStatus.REJECTED
+                            d.approved_by = "auto-committed"
+                            d.approved_at = state.clock
+                            logger(f"t={state.sim_tick} clock={state.clock} {d.action.value} <- {d.event_id} [AUTO-CANCELLED: vehicle in jam]")
         # Decide once per event: skip any active event that already has a decision.
         # This bounds state.decisions and stops a standing condition re-firing
         # (and re-wiping the plan) every tick.
         handled = {d.event_id for d in state.decisions}
-        # Build the set of edge targets already handled so we can skip the reverse
-        # direction of a bidirectional flood/jam (both directed edges map to the same
-        # physical road; routing around one already routes around the other).
-        handled_targets = {
-            e.target for e in state.events if e.id in handled
-        }
+        # Collapse every disruption on the same physical road to ONE decision.
+        # road_key() strips the parallel-edge suffix (#2) and ignores direction, so
+        # the forward/reverse edges AND the parallel shortcut of one corridor (e.g.
+        # DEPOT->C001, C001->DEPOT, DEPOT->C001#2, C001->DEPOT#2) share a key.
+        # Without this a single jam/flood corridor produced 2-3 separate pending
+        # cards for the same vehicle. Dedup spans both prior ticks (handled_roads)
+        # and within this tick (seen_roads).
+        handled_roads = {road_key(e.target) for e in state.events if e.id in handled}
         events = []
+        seen_roads = set()
         for e in state.get_active_events():
             if e.id in handled:
                 continue
-            # Skip reverse edge if the forward direction is already being handled.
-            if "->" in e.target:
-                raw_b = e.target.split("->", 1)[1]
-                b = raw_b.split("#")[0]
-                a = e.target.split("->", 1)[0]
-                if f"{b}->{a}" in handled_targets:
-                    continue
+            key = road_key(e.target)
+            if key in handled_roads or key in seen_roads:
+                continue
             if not is_event_on_any_route(state, e):
                 continue
             events.append(e)
+            seen_roads.add(key)
 
         severity_by_event = {e.id: e.severity for e in events}
         decisions = components.decision_engine.decide(state, events)
@@ -235,6 +287,23 @@ def run_loop(state: WorldState, components: Components, n_ticks: int,
                         # Store the full VehicleRoute objects so approve() can apply
                         # the pre-computed plan without re-solving from scratch.
                         d.impact_estimate["_proposed_plan"] = proposed
+
+                        # Update description with affected vehicle IDs so the UI
+                        # card always names the vehicles involved (req: bug fix).
+                        # Vehicles in the jam are noted as committed (cannot reroute).
+                        if affected_vids:
+                            reroutable = sorted(routes.keys())
+                            in_jam = sorted(
+                                v for v in affected_vids
+                                if v not in routes and _vehicle_in_jam(state, v)
+                            )
+                            parts = []
+                            if reroutable:
+                                parts.append("reroute: " + ", ".join(reroutable))
+                            if in_jam:
+                                parts.append("committed (in jam): " + ", ".join(in_jam))
+                            if parts:
+                                d.description += " — " + " | ".join(parts)
                     except Exception as e:
                         print(f"Failed to compute preview plan: {e}")
             logger(f"t={state.sim_tick} clock={state.clock} "

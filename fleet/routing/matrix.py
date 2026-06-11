@@ -6,9 +6,10 @@ flooded/blocked edges. Parallel edges A->B are handled naturally: relaxing all
 outgoing edges keeps the minimum. Pure + deterministic; no solver here."""
 
 import heapq
+from contextlib import contextmanager
 from typing import Dict, List
 
-from fleet.contracts.state import RoadGraph, WorldState, VehicleStatus, EdgeStatus
+from fleet.contracts.state import RoadGraph, WorldState, VehicleStatus, EdgeStatus, RoadNode, RoadEdge, Location
 from fleet.contracts.dto import RoutingProblem, FleetVehicleSpec, TaskSpec
 
 DEFAULT_SERVICE_TIME_MIN = 10.0
@@ -74,6 +75,116 @@ def shortest_path_edges(graph: RoadGraph, source: str, dest: str,
         cur = edge.from_node
     path.reverse()
     return path
+
+
+def avoidance_times_from(graph: RoadGraph, source: str,
+                         wade_capability: float,
+                         extra_congestion_factor: float = 100.0) -> Dict[str, float]:
+    """Dijkstra from `source` with `extra_congestion_factor` × penalty on CONGESTED edges.
+    Used for rerouting so the solver strongly avoids jammed roads."""
+    dist: Dict[str, float] = {source: 0.0}
+    pq: List = [(0.0, source)]
+    while pq:
+        d, u = heapq.heappop(pq)
+        if d > dist.get(u, INF):
+            continue
+        for edge in graph.out_edges(u):
+            if not edge.is_passable(wade_capability):
+                continue
+            cost = edge.effective_time
+            if edge.status == EdgeStatus.CONGESTED:
+                cost *= extra_congestion_factor
+            nd = d + cost
+            if nd < dist.get(edge.to_node, INF):
+                dist[edge.to_node] = nd
+                heapq.heappush(pq, (nd, edge.to_node))
+    return dist
+
+
+@contextmanager
+def inject_virtual_node(
+        graph: RoadGraph, cp_id: str, from_node: str, to_node: str,
+        elapsed_min: float, wade_capability: float,
+        extra_congestion_factor: float = 100.0):
+    """Context manager to temporarily inject a virtual node `cp_id` into the graph
+    representing the vehicle's physical position along the edge (from_node -> to_node)."""
+    edge = None
+    for e in graph.out_edges(from_node):
+        if e.to_node == to_node and e.is_passable(wade_capability):
+            if edge is None or e.effective_time < edge.effective_time:
+                edge = e
+
+    cost_to_from = elapsed_min
+    if edge is None:
+        cost_to_dest = INF
+    else:
+        cong_start_min = edge.congestion_start_frac * edge.base_time_minutes
+        if elapsed_min <= cong_start_min:
+            uncong_before = cong_start_min - elapsed_min
+            cong_seg = (edge.congestion_end_frac - edge.congestion_start_frac) * edge.base_time_minutes
+            cong_cost = cong_seg * edge.traffic_factor
+            if extra_congestion_factor > 1.0 and edge.status == EdgeStatus.CONGESTED:
+                cong_cost *= extra_congestion_factor
+            after_cong = (1.0 - edge.congestion_end_frac) * edge.base_time_minutes
+            cost_to_dest = (uncong_before + cong_cost + after_cong)
+        else:
+            cost_to_dest = max(0.0, edge.effective_time - elapsed_min)
+
+        flood_pen = 100.0 if edge.flood_level > 0.0 else 1.0
+        cost_to_dest *= flood_pen
+
+    from_loc = graph.nodes[from_node].location if from_node in graph.nodes else Location(lat=0, lng=0, address="", name="")
+    cp_node = RoadNode(id=cp_id, location=from_loc)
+    graph.nodes[cp_id] = cp_node
+
+    added_edges = []
+    # Edge: cp -> from_node and from_node -> cp
+    e_bf = RoadEdge(from_node=cp_id, to_node=from_node, distance_km=0, base_time_minutes=cost_to_from)
+    e_bf.id = f"{cp_id}->{from_node}"
+    e_fb = RoadEdge(from_node=from_node, to_node=cp_id, distance_km=0, base_time_minutes=cost_to_from)
+    e_fb.id = f"{from_node}->{cp_id}"
+    added_edges.extend([e_bf, e_fb])
+
+    # Edge: cp -> to_node and to_node -> cp
+    if cost_to_dest < INF:
+        e_ft = RoadEdge(from_node=cp_id, to_node=to_node, distance_km=0, base_time_minutes=cost_to_dest)
+        e_ft.id = f"{cp_id}->{to_node}"
+        e_tf = RoadEdge(from_node=to_node, to_node=cp_id, distance_km=0, base_time_minutes=cost_to_dest)
+        e_tf.id = f"{to_node}->{cp_id}"
+        added_edges.extend([e_ft, e_tf])
+
+    for e in added_edges:
+        graph.edges[e.id] = e
+        if e.from_node not in graph.adjacency:
+            graph.adjacency[e.from_node] = []
+        graph.adjacency[e.from_node].append(e.id)
+
+    try:
+        yield cp_id
+    finally:
+        del graph.nodes[cp_id]
+        for e in added_edges:
+            if e.id in graph.edges:
+                del graph.edges[e.id]
+            if e.from_node in graph.adjacency:
+                if e.id in graph.adjacency[e.from_node]:
+                    graph.adjacency[e.from_node].remove(e.id)
+
+def shortest_times_from_virtual(
+        graph: RoadGraph,
+        from_node: str,
+        to_node: str,
+        elapsed_min: float,
+        wade_capability: float,
+        extra_congestion_factor: float = 100.0,
+) -> Dict[str, float]:
+    """Dijkstra from a virtual position `elapsed_min` minutes into edge (from_node->to_node)."""
+    with inject_virtual_node(graph, "temp_cp", from_node, to_node, elapsed_min, wade_capability, extra_congestion_factor) as cp_id:
+        dist = avoidance_times_from(graph, cp_id, wade_capability, extra_congestion_factor)
+        # Remove cp_id from the returned dict so it behaves like a normal lookup
+        if cp_id in dist:
+            del dist[cp_id]
+        return dist
 
 
 def build_time_matrix(graph: RoadGraph, locations: List[str],

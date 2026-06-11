@@ -186,6 +186,8 @@ class RoadEdge:
     status: EdgeStatus = EdgeStatus.OPEN
     flood_level: float = 0.0       # flood depth (m); compared to Vehicle.wade_capability
     id: str = ""                   # unique edge id; auto-derived from endpoints if empty
+    congestion_start_frac: float = 0.0  # fraction along edge where jam begins [0..1]
+    congestion_end_frac: float = 1.0    # fraction along edge where jam ends [0..1]
 
     def __post_init__(self):
         if not self.id:
@@ -194,7 +196,11 @@ class RoadEdge:
     @property
     def effective_time(self) -> float:
         flood_penalty = 100.0 if self.flood_level > 0.0 else 1.0
-        return self.base_time_minutes * self.traffic_factor * flood_penalty
+        # Only the congested segment [congestion_start_frac, congestion_end_frac]
+        # incurs the traffic_factor penalty; the rest is at normal speed.
+        cong_frac = max(0.0, min(1.0, self.congestion_end_frac - self.congestion_start_frac))
+        effective_traffic = (1.0 - cong_frac) + cong_frac * self.traffic_factor
+        return self.base_time_minutes * effective_traffic * flood_penalty
 
     def is_passable(self, wade_capability: float) -> bool:
         """BLOCKED and FLOODED status edges are forbidden for all vehicles.

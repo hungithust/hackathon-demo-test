@@ -99,8 +99,11 @@ function DispatchMap({ state, speed = 2, selectedVeh, onSelectVeh, selectedEvent
     .map(([lng, lat], i) => { const p = project(lat, lng); return (i ? "L" : "M") + p.x.toFixed(1) + "," + p.y.toFixed(1); })
     .join(" ");
 
-  // Returns an SVG path string for a short segment centered on the road
-  const getEventPathStr = (path) => {
+  // Returns an SVG path string for the jammed sub-segment of the road. When the
+  // event carries congestion fractions (cong_start/cong_end) the overlay is drawn
+  // at the real jam location along the edge; otherwise it falls back to a short
+  // segment centered on the road midpoint.
+  const getEventPathStr = (path, ev) => {
     if (!path || path.length < 2) return null;
     const pts = path.map(([lng, lat]) => project(lat, lng));
     let totalLen = 0;
@@ -111,10 +114,18 @@ function DispatchMap({ state, speed = 2, selectedVeh, onSelectVeh, selectedEvent
       totalLen += Math.sqrt(dx*dx + dy*dy);
       lens.push(totalLen);
     }
-    const targetLen = Math.min(60, totalLen * 0.9); // 60px or 90% of edge
-    const midDist = totalLen / 2;
-    const startDist = Math.max(0, midDist - targetLen / 2);
-    const endDist = Math.min(totalLen, midDist + targetLen / 2);
+    let startDist, endDist;
+    const hasFrac = ev && typeof ev.cong_start === "number" && typeof ev.cong_end === "number"
+      && (ev.cong_start > 0 || ev.cong_end < 1);
+    if (hasFrac) {
+      startDist = totalLen * ev.cong_start;
+      endDist = totalLen * ev.cong_end;
+    } else {
+      const targetLen = Math.min(60, totalLen * 0.9); // 60px or 90% of edge
+      const midDist = totalLen / 2;
+      startDist = Math.max(0, midDist - targetLen / 2);
+      endDist = Math.min(totalLen, midDist + targetLen / 2);
+    }
 
     const getPtAtDist = (d) => {
       if (d <= 0) return pts[0];
@@ -233,7 +244,7 @@ function DispatchMap({ state, speed = 2, selectedVeh, onSelectVeh, selectedEvent
              if (!ev) return null;
              const color = ev.event_type === "flooded_area" ? "#3b82f6" : "#FF4D5E";
              return (
-               <path key={r.edge_id + "-evt"} d={getEventPathStr(r.path) || pathStr(r.path)} 
+               <path key={r.edge_id + "-evt"} d={getEventPathStr(r.path, ev) || pathStr(r.path)}
                  stroke={color} strokeWidth={6.0} opacity={0.8}
                  style={{ cursor: "pointer" }}
                  onMouseEnter={() => setTip({ id: EVENT_TYPES[ev.event_type]?.label || ev.event_type, color: color,
@@ -328,6 +339,21 @@ function DispatchMap({ state, speed = 2, selectedVeh, onSelectVeh, selectedEvent
           );
         })}
 
+        {/* road waypoints (detour junctions like W001 that split a corridor) */}
+        {(state.waypoints || []).map((w) => {
+          const p = project(w.lat, w.lng);
+          return (
+            <g key={w.id} transform={`translate(${p.x},${p.y})`}
+               onMouseEnter={() => setTip({ id: w.id + " · " + (w.name || "Detour point"), color: "#A855F7",
+                 rows: [["Role", "Detour waypoint"], ["On corridor", "DEPOT → C001"]] })}
+               onMouseLeave={() => setTip(null)} style={{ cursor: "pointer" }}>
+              <circle r="10" fill="#A855F7" opacity=".18"/>
+              <rect x="-5.5" y="-5.5" width="11" height="11" rx="2" transform="rotate(45)" fill="#A855F7" stroke="#ffffff" strokeWidth="1.5"/>
+              <text className="node-label" x="10" y="3" fill="#7c3aed" style={{ fontWeight: 600, fontSize: 10 }}>{w.id}</text>
+            </g>
+          );
+        })}
+
         {/* depot */}
         <g transform={`translate(${PNODES.DEPOT.x},${PNODES.DEPOT.y})`}
            onMouseEnter={() => setTip({ id: "DEPOT · " + state.depot.name, color: "#F5C451",
@@ -381,6 +407,7 @@ function DispatchMap({ state, speed = 2, selectedVeh, onSelectVeh, selectedEvent
         <div className="legend-row"><span className="ldot" style={{ background: "#F5C451", borderRadius: 2, transform: "rotate(45deg)" }}></span> Depot</div>
         <div className="legend-row"><span className="ldot" style={{ background: "#4DA6FF" }}></span> Customer (size = priority)</div>
         <div className="legend-row"><span className="ldot" style={{ background: "#34D399", borderRadius: 4 }}></span> Vehicle</div>
+        <div className="legend-row"><span className="ldot" style={{ background: "#A855F7", borderRadius: 2, transform: "rotate(45deg)" }}></span> Detour point</div>
         <div className="legend-row"><span className="ldot" style={{ background: "#FF4D5E" }}></span> Active event</div>
       </div>
 
