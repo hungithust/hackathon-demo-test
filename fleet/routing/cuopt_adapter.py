@@ -57,20 +57,19 @@ def to_cuopt_request(problem: RoutingProblem) -> dict:
 
     veh_locations, cap_row, vtws, veh_types = [], [], [], []
     for f in problem.fleet:
-        veh_locations.append([depot, depot])
+        start_loc_idx = problem.locations.index(f.start_location or problem.depot_id)
+        veh_locations.append([start_loc_idx, depot])
         cap_row.append(int(round(f.capacity_kg)))
         vtws.append([mins(f.shift_start), mins(f.shift_end)])
         veh_types.append(type_keys[f.veh_type])
 
     return {
         "cost_matrix_data": {"data": matrices},
-        "travel_time_matrix_data": {"data": matrices},
         "task_data": {
             "task_locations": task_locations,
             "demand": [demand_row],
             "task_time_windows": tws,
             "service_times": service,
-            "penalties": penalties,
         },
         "fleet_data": {
             "vehicle_locations": veh_locations,
@@ -83,7 +82,12 @@ def to_cuopt_request(problem: RoutingProblem) -> dict:
 
 def from_cuopt_response(problem: RoutingProblem, response: dict,
                         base: datetime) -> RoutingSolution:
-    sr = response["response"]["solver_response"]
+    res = response.get("response", {})
+    if isinstance(res, dict):
+        sr = res.get("solver_response", res)
+    else:
+        sr = {"status": -1}
+    
     status = sr.get("status", 0)
 
     routes: Dict[str, List[SolvedStop]] = {f.id: [] for f in problem.fleet}
@@ -92,6 +96,11 @@ def from_cuopt_response(problem: RoutingProblem, response: dict,
         vehicle = problem.fleet[int(v_key)]
         task_ids = vd.get("task_id", [])
         stamps = vd.get("arrival_stamp", [])
+        # Strip start (current location) and end (Depot) elements from the raw response
+        if len(task_ids) >= 2:
+            task_ids = task_ids[1:-1]
+            stamps = stamps[1:-1]
+            
         served = [(tid, st) for tid, st in zip(task_ids, stamps)
                   if tid != "Depot"]
         remaining = sum(int(round(problem.tasks[int(tid)].demand_kg))
@@ -159,14 +168,53 @@ class CuOptAdapter:
                 "CuOptAdapter has no transport and settings.cuopt_endpoint is "
                 "empty; configure a cuOpt server or inject a transport.")
 
-        from cuopt_sh_client import CuOptServiceSelfHostClient  # optional dep
-
         # endpoint formatted as "host:port" (e.g. "localhost:5000")
         host, _, port = endpoint.partition(":")
-        client = CuOptServiceSelfHostClient(ip=host or "localhost",
-                                            port=int(port or "5000"))
+        
+        host = host or "localhost"
+        port = int(port or "5000")
 
         def transport(request: dict) -> dict:
-            return client.get_optimized_routes(request)
+            import requests
+            import time
+
+            request_url = f"http://{host}:{port}/cuopt/request"
+            solution_url = f"http://{host}:{port}/cuopt/solution"
+
+            if "solver_config" not in request:
+                request["solver_config"] = {"time_limit": 2.0}
+
+            try:
+                # Nộp bài toán
+                response = requests.post(request_url, json=request, timeout=10)
+                response.raise_for_status()
+                req_id = response.json().get("reqId")
+            except requests.exceptions.RequestException as e:
+                raise RuntimeError(f"Lỗi khi nộp bài toán lên cuOpt API: {e}")
+
+            if not req_id:
+                raise RuntimeError("API cuOpt không trả về reqId.")
+
+            # Chờ kết quả (Polling)
+            max_retries = 30
+            for attempt in range(max_retries):
+                try:
+                    sol_response = requests.get(f"{solution_url}/{req_id}", timeout=10)
+                    sol_response.raise_for_status()
+                    sol_data = sol_response.json()
+
+                    if "response" in sol_data:
+                        import json
+                        print("\n" + "="*50)
+                        print("[CuOptAdapter] RAW API RESPONSE FROM LOCAL CUOPT:")
+                        print(json.dumps(sol_data, indent=2))
+                        print("="*50 + "\n")
+                        return sol_data
+                except requests.exceptions.RequestException as e:
+                    raise RuntimeError(f"Lỗi khi lấy kết quả từ cuOpt API: {e}")
+
+                time.sleep(2)
+
+            raise RuntimeError("Hết thời gian chờ. Hệ thống cuOpt có thể đang quá tải.")
 
         return transport

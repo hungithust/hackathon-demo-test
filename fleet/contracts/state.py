@@ -50,6 +50,8 @@ class DecisionEngine(str, Enum):
     RULE_BASED = "rule_based"
     CLAUDE = "claude"
     HUMAN = "human"
+    LOCAL_NIM = "local_nim"
+    LOCAL_API = "local_api"
 
 
 class DecisionAction(str, Enum):
@@ -113,6 +115,7 @@ class CustomerProfile:
     orders: Dict[str, int]
     time_window: TimeWindow
     priority: int = 4              # 1 = most urgent .. 4 = least urgent (see PriorityLevel)
+    service_time_min: float = 10.0
     sla_deadline: Optional[datetime] = None
     contact_name: str = ""
     contact_phone: str = ""
@@ -128,6 +131,7 @@ class Stop:
     actual_arrival: Optional[datetime] = None
     actual_departure: Optional[datetime] = None
     load_after_stop: float = 0.0
+    demand_kg: float = 0.0          # kg to deliver at this stop (for live load %)
 
 
 @dataclass
@@ -182,6 +186,8 @@ class RoadEdge:
     status: EdgeStatus = EdgeStatus.OPEN
     flood_level: float = 0.0       # flood depth (m); compared to Vehicle.wade_capability
     id: str = ""                   # unique edge id; auto-derived from endpoints if empty
+    congestion_start_frac: float = 0.0  # fraction along edge where jam begins [0..1]
+    congestion_end_frac: float = 1.0    # fraction along edge where jam ends [0..1]
 
     def __post_init__(self):
         if not self.id:
@@ -189,12 +195,17 @@ class RoadEdge:
 
     @property
     def effective_time(self) -> float:
-        return self.base_time_minutes * self.traffic_factor
+        flood_penalty = 100.0 if self.flood_level > 0.0 else 1.0
+        # Only the congested segment [congestion_start_frac, congestion_end_frac]
+        # incurs the traffic_factor penalty; the rest is at normal speed.
+        cong_frac = max(0.0, min(1.0, self.congestion_end_frac - self.congestion_start_frac))
+        effective_traffic = (1.0 - cong_frac) + cong_frac * self.traffic_factor
+        return self.base_time_minutes * effective_traffic * flood_penalty
 
     def is_passable(self, wade_capability: float) -> bool:
-        """Spec §6.5: BLOCKED forbidden for all; otherwise flooded edge is
-        forbidden when its flood_level exceeds the vehicle's wade_capability."""
-        if self.status == EdgeStatus.BLOCKED:
+        """BLOCKED and FLOODED status edges are forbidden for all vehicles.
+        An OPEN edge with partial flood depth is checked against wade_capability."""
+        if self.status in (EdgeStatus.BLOCKED, EdgeStatus.FLOODED):
             return False
         return self.flood_level <= wade_capability
 

@@ -1,0 +1,106 @@
+from datetime import datetime
+
+from fleet.contracts.state import EventType, DecisionAction, Event, EventSeverity
+from fleet.agent.scoring_engine import (
+    candidate_actions, _resolves, score_action, _Weights, ScoringEngine,
+)
+from fleet.contracts.interfaces import DecisionEngine as DecisionEngineProto
+from fleet.scenarios import build_sample_state
+from config.settings import load_settings
+
+
+def _evt(etype, target, sev=EventSeverity.HIGH):
+    return Event(id="E1", event_type=etype, target=target, severity=sev,
+                 started_at=datetime(2026, 6, 7, 8, 0))
+
+
+def test_candidates_per_event_type():
+    assert DecisionAction.REROUTE in candidate_actions(EventType.FLOODED_AREA)
+    assert DecisionAction.REALLOCATE in candidate_actions(EventType.VEHICLE_BREAKDOWN)
+    assert len(candidate_actions(EventType.INVENTORY_SHORTAGE)) >= 2
+
+
+def test_resolves_table():
+    assert _resolves(EventType.FLOODED_AREA, DecisionAction.REROUTE) is True
+    assert _resolves(EventType.FLOODED_AREA, DecisionAction.DEFER) is False
+    assert _resolves(EventType.INVENTORY_SHORTAGE, DecisionAction.CANCEL) is True
+    assert _resolves(EventType.INVENTORY_SHORTAGE, DecisionAction.REPRIORITIZE) is False
+
+
+def test_resolving_action_cheaper_than_nonresolving():
+    s = build_sample_state()
+    w = _Weights(load_settings())
+    e = _evt(EventType.FLOODED_AREA, "DEPOT->C001#2", EventSeverity.CRITICAL)
+    reroute = score_action(s, e, DecisionAction.REROUTE, w)     # resolves
+    defer = score_action(s, e, DecisionAction.DEFER, w)         # does not resolve
+    assert reroute < defer
+
+
+def test_lower_delay_resolving_action_preferred():
+    s = build_sample_state()
+    w = _Weights(load_settings())
+    e = _evt(EventType.FLOODED_AREA, "DEPOT->C001#2")
+    assert (score_action(s, e, DecisionAction.REROUTE, w)
+            < score_action(s, e, DecisionAction.RESCHEDULE, w))
+
+
+def test_priority_weight_scales_drop_cost():
+    s = build_sample_state()
+    w = _Weights(load_settings())
+    # C001 has priority 1 (urgent); compare CANCEL cost for an urgent vs a fabricated low-prio customer
+    s.customers["C001"].priority = 1
+    s.customers["C002"].priority = 4
+    e_urgent = _evt(EventType.INVENTORY_SHORTAGE, "C001")
+    e_low = _evt(EventType.INVENTORY_SHORTAGE, "C002")
+    assert (score_action(s, e_urgent, DecisionAction.CANCEL, w)
+            > score_action(s, e_low, DecisionAction.CANCEL, w))
+
+
+def test_scoring_engine_conforms_to_protocol():
+    assert isinstance(ScoringEngine(load_settings()), DecisionEngineProto)
+
+
+def test_decide_picks_lowest_cost_and_records_table():
+    s = build_sample_state()
+    eng = ScoringEngine(load_settings())
+    e = _evt(EventType.FLOODED_AREA, "DEPOT->C001#2", EventSeverity.CRITICAL)
+    decisions = eng.decide(s, [e])
+    assert len(decisions) == 1
+    d = decisions[0]
+    assert d.action == DecisionAction.REROUTE              # cheapest resolving action
+    assert d.event_id == "E1"
+    assert "score_reroute" in d.impact_estimate            # scored table persisted
+    assert "score_defer" in d.impact_estimate
+    assert d.impact_estimate["added_delay_min"] == 8.0
+    assert "reroute" in d.reasoning and "defer" in d.reasoning   # alternatives in prose
+
+
+def test_decide_is_deterministic():
+    s = build_sample_state()
+    e = _evt(EventType.VEHICLE_BREAKDOWN, "V001", EventSeverity.CRITICAL)
+    a = ScoringEngine(load_settings()).decide(s, [e])[0]
+    b = ScoringEngine(load_settings()).decide(s, [e])[0]
+    assert a.action == b.action and a.impact_estimate == b.impact_estimate
+
+
+def test_proactive_off_by_default():
+    s = build_sample_state()
+    eng = ScoringEngine(load_settings())          # enable_proactive False
+    # drive depot stock to zero so everything is "at risk"
+    s.depot.inventory = {sku: 0 for sku in s.depot.inventory}
+    assert eng.decide(s, []) == []                # no events, proactive disabled => nothing
+
+
+def test_proactive_emits_once_per_at_risk_customer_when_enabled():
+    s = build_sample_state()
+    eng = ScoringEngine(load_settings(env={"ENABLE_PROACTIVE": "1"}))
+    # make SKU001 short: zero its stock (C001 & C002 order SKU001)
+    s.depot.inventory["SKU001"] = 0
+    first = eng.decide(s, [])
+    ids = {d.id for d in first}
+    assert "DEC_PROACTIVE_C001" in ids
+    assert all(d.event_id is None for d in first)
+    assert all(d.action == DecisionAction.REPRIORITIZE for d in first)
+    # second call with the same shortfall must NOT re-emit (dedup)
+    second = eng.decide(s, [])
+    assert "DEC_PROACTIVE_C001" not in {d.id for d in second}

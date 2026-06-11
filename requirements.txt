@@ -8,6 +8,16 @@ ortools>=9.8
 # DECISION_ENGINE=claude with ANTHROPIC_API_KEY set. The rule-based engine is the
 # default and the test suite never imports this (transport is injected).
 # anthropic
-# UI (M7): Streamlit dashboard. Needed only to run `streamlit run fleet/ui/app.py`;
-# the headless system and the test suite do not import it.
-streamlit>=1.30
+# UI: FastAPI control room. Serves the React dashboard (fleet/ui/web/) + a thin
+# JSON API over SimulationController. Run with `python -m fleet.ui.server`.
+# Needed only for the UI; the headless system and the test suite do not import it.
+fastapi>=0.110
+uvicorn>=0.29
+# --- intake layer (optional, lazy-imported; not needed for the test suite) ---
+# openai>=1.0          # OpenAI-compatible client for the NIM extractor transport
+# faster-whisper>=1.0  # self-hosted Vietnamese ASR (WhisperTranscriber)
+# nvidia-riva-client   # Riva ASR NIM transport (RivaTranscriber)
+# --- real-map world (optional, lazy-imported; only for WORLD=real) ---
+# osmnx>=2.0       # OSM drive graph download + load
+# networkx>=3.0    # shortest-path routing over the graph
+# pydeck>=0.8      # map rendering (bundled with streamlit)

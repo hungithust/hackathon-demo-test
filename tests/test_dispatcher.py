@@ -52,6 +52,18 @@ def test_reallocate_retires_broken_vehicle_and_drops_its_route():
     assert "V001" not in s.plan
 
 
+def test_accelerate_reduces_service_time_and_bumps_priority():
+    s = build_sample_state()
+    s.events.append(Event(id="E1", event_type=EventType.URGENT_ORDER,
+                          target="C003", severity=EventSeverity.HIGH,
+                          started_at=s.clock))
+    before = s.customers["C003"].service_time_min
+    Dispatcher().apply(s, _decision(DecisionAction.ACCELERATE))
+    assert s.customers["C003"].priority == int(PriorityLevel.P1)
+    assert s.customers["C003"].service_time_min == 0.0
+    assert before > s.customers["C003"].service_time_min
+
+
 def test_defer_drops_stops_for_customers_ordering_the_short_sku():
     s = build_sample_state()
     # C001 orders SKU001; an inventory shortage on SKU001 -> defer C001's stop

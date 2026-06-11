@@ -63,3 +63,80 @@ def test_default_detector_is_rule():
 def test_zscore_detector_selected_by_setting():
     comps = build_components(load_settings(env={"DETECTOR_ENGINE": "zscore"}))
     assert isinstance(comps.detector, ZScoreDetector)
+
+
+def test_factory_selects_holt_winters_when_requested():
+    from fleet.forecast.holt_winters import HoltWintersForecaster
+    c = build_components(load_settings(env={"FORECASTER_ENGINE": "holt"}))
+    assert isinstance(c.forecaster, HoltWintersForecaster)
+
+
+def test_factory_defaults_to_ewma_forecaster():
+    from fleet.forecast.ewma import EwmaForecaster
+    c = build_components(load_settings(env={}))
+    assert isinstance(c.forecaster, EwmaForecaster)
+
+
+def test_factory_selects_layered_detector():
+    from fleet.detection.composite import CompositeDetector
+    from fleet.factory import build_components
+    from config.settings import load_settings
+    c = build_components(load_settings(env={"DETECTOR_ENGINE": "layered"}))
+    assert isinstance(c.detector, CompositeDetector)
+
+
+def test_factory_defaults_to_rule_detector():
+    from fleet.detection.rules import RuleDetector
+    from fleet.factory import build_components
+    from config.settings import load_settings
+    c = build_components(load_settings(env={}))
+    assert isinstance(c.detector, RuleDetector)
+
+
+def test_factory_selects_scoring_engine():
+    from fleet.agent.scoring_engine import ScoringEngine
+    from fleet.factory import build_components
+    from config.settings import load_settings
+    c = build_components(load_settings(env={"DECISION_ENGINE": "scoring"}))
+    assert isinstance(c.decision_engine, ScoringEngine)
+
+
+def test_factory_defaults_to_rule_engine():
+    from fleet.agent.rule_based import RuleBasedEngine
+    from fleet.factory import build_components
+    from config.settings import load_settings
+    c = build_components(load_settings(env={}))
+    assert isinstance(c.decision_engine, RuleBasedEngine)
+
+
+def test_factory_selects_nim_agent_when_endpoint_set():
+    from fleet.factory import build_components
+    from fleet.agent.nim_agent import NimAgent
+    from config.settings import load_settings
+    s = load_settings({"DECISION_ENGINE": "nim",
+                       "NIM_ENDPOINT": "http://localhost:8000/v1"})
+    assert isinstance(build_components(s).decision_engine, NimAgent)
+
+
+def test_factory_nim_without_endpoint_falls_back_to_rule():
+    from fleet.factory import build_components
+    from fleet.agent.rule_based import RuleBasedEngine
+    from config.settings import load_settings
+    s = load_settings({"DECISION_ENGINE": "nim"})   # engine requested, no endpoint
+    assert isinstance(build_components(s).decision_engine, RuleBasedEngine)
+
+
+def test_build_transcriber_defaults_to_null():
+    from config.settings import load_settings
+    from fleet.factory import build_transcriber
+    from fleet.intake.asr import NullTranscriber
+    t = build_transcriber(load_settings({}))
+    assert isinstance(t, NullTranscriber)
+
+
+def test_build_transcriber_selects_whisper():
+    from config.settings import load_settings
+    from fleet.factory import build_transcriber
+    from fleet.intake.asr import WhisperTranscriber
+    t = build_transcriber(load_settings({"ASR_ENGINE": "whisper"}))
+    assert isinstance(t, WhisperTranscriber)

@@ -107,3 +107,22 @@ def test_decide_falls_back_to_rule_action_on_transport_error():
 def test_decide_no_events_returns_empty():
     agent = ClaudeAgent(settings=None, complete=lambda s, u: {})
     assert agent.decide(build_sample_state(), []) == []
+
+
+def test_parse_decision_stamps_engine():
+    from fleet.contracts.state import DecisionEngine, Event, EventType, EventSeverity
+    from fleet.agent.claude_agent import parse_decision
+    from fleet.scenarios import build_sample_state
+
+    clock = build_sample_state().clock
+    evt = Event(id="E1", event_type=EventType.TRAFFIC, target="e1",
+                severity=EventSeverity.MEDIUM, started_at=clock)
+    data = {"action": "reroute", "reasoning": "x", "added_delay_min": 3}
+
+    d_default = parse_decision(data, evt, 1, clock)
+    assert d_default.engine == DecisionEngine.CLAUDE
+    assert d_default.description.startswith("[claude]")   # unchanged default
+
+    d_nim = parse_decision(data, evt, 1, clock, engine=DecisionEngine.LOCAL_NIM)
+    assert d_nim.engine == DecisionEngine.LOCAL_NIM
+    assert d_nim.description.startswith("[local_nim]")

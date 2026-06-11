@@ -15,6 +15,22 @@ from fleet.contracts.dto import RoutingProblem, RoutingSolution, SolvedStop
 _UNREACHABLE = 10_000_000        # minutes; effectively forbids an arc
 _DROP_PENALTY_BASE = 100_000     # >> any route time, so feasible visits are kept
 
+# OR-Tools first-solution constructors (pha 1: dựng nghiệm khởi đầu).
+_FIRST_SOLUTION = {
+    "path_cheapest_arc": "PATH_CHEAPEST_ARC",
+    "parallel_cheapest_insertion": "PARALLEL_CHEAPEST_INSERTION",
+    "savings": "SAVINGS",
+    "christofides": "CHRISTOFIDES",
+    "automatic": "AUTOMATIC",
+}
+# OR-Tools local-search metaheuristics (pha 2: cải thiện nghiệm — phần "tối ưu" VRP).
+_METAHEURISTIC = {
+    "greedy_descent": "GREEDY_DESCENT",
+    "guided_local_search": "GUIDED_LOCAL_SEARCH",
+    "simulated_annealing": "SIMULATED_ANNEALING",
+    "tabu_search": "TABU_SEARCH",
+}
+
 
 class CpuSolver:
     def __init__(self, settings=None):
@@ -53,7 +69,9 @@ class CpuSolver:
         horizon = max([mins(f.shift_end) for f in problem.fleet]
                       + [mins(t.tw_end) for t in problem.tasks]) + 1
 
-        manager = pywrapcp.RoutingIndexManager(n, num_vehicles, depot)
+        starts = [problem.locations.index(f.start_location or problem.depot_id) for f in problem.fleet]
+        ends = [depot] * num_vehicles
+        manager = pywrapcp.RoutingIndexManager(n, num_vehicles, starts, ends)
         routing = pywrapcp.RoutingModel(manager)
 
         def time_int(value: float) -> int:
@@ -107,16 +125,7 @@ class CpuSolver:
                 penalty = _DROP_PENALTY_BASE * (5 - max(1, min(4, t.priority)))
                 routing.AddDisjunction([manager.NodeToIndex(i)], penalty)
 
-        params = pywrapcp.DefaultRoutingSearchParameters()
-        params.first_solution_strategy = (
-            routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC)
-        limit = int(getattr(self.settings, "solver_time_limit_sec", 0) or 0)
-        if limit > 0:
-            params.local_search_metaheuristic = (
-                routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH)
-            params.time_limit.FromSeconds(limit)
-
-        solution = routing.SolveWithParameters(params)
+        solution = routing.SolveWithParameters(self._search_parameters())
         if solution is None:
             return RoutingSolution(
                 routes={f.id: [] for f in problem.fleet},
@@ -125,6 +134,42 @@ class CpuSolver:
 
         return self._read(problem, manager, routing, solution, time_dim,
                           demand, service, base, depot)
+
+    def _search_parameters(self):
+        """Build OR-Tools search params from settings. Default (no metaheuristic,
+        no limits) = PATH_CHEAPEST_ARC only — the deterministic greedy construction
+        that the validated dataset was generated with. Setting solver_metaheuristic
+        (or a positive solver_time_limit_sec, kept for back-compat) turns on the
+        local-search optimization phase. Prefer solver_solution_limit for a
+        machine-independent, reproducible stop; the wall-clock time limit consumes
+        its full budget per solve even on tiny problems."""
+        s = self.settings
+        params = pywrapcp.DefaultRoutingSearchParameters()
+
+        fs = str(getattr(s, "solver_first_solution", "") or "path_cheapest_arc").lower()
+        params.first_solution_strategy = getattr(
+            routing_enums_pb2.FirstSolutionStrategy,
+            _FIRST_SOLUTION.get(fs, "PATH_CHEAPEST_ARC"))
+
+        time_limit = int(getattr(s, "solver_time_limit_sec", 0) or 0)
+        sol_limit = int(getattr(s, "solver_solution_limit", 0) or 0)
+        meta = str(getattr(s, "solver_metaheuristic", "") or "").lower()
+        if meta in ("", "none", "off") and time_limit > 0:
+            meta = "guided_local_search"      # back-compat: a time limit implied GLS
+
+        if meta not in ("", "none", "off"):
+            params.local_search_metaheuristic = getattr(
+                routing_enums_pb2.LocalSearchMetaheuristic,
+                _METAHEURISTIC.get(meta, "GUIDED_LOCAL_SEARCH"))
+            # A metaheuristic loops until it hits a stop. Honor whichever limits
+            # are given; if none, cap solutions so tiny problems still terminate.
+            if sol_limit > 0:
+                params.solution_limit = sol_limit
+            if time_limit > 0:
+                params.time_limit.FromSeconds(time_limit)
+            if sol_limit <= 0 and time_limit <= 0:
+                params.solution_limit = 100
+        return params
 
     @staticmethod
     def _read(problem, manager, routing, solution, time_dim,
@@ -140,6 +185,8 @@ class CpuSolver:
             remaining = sum(demand[manager.IndexToNode(ix)] for ix in node_indices)
             stops: List[SolvedStop] = []
             for ix in node_indices:
+                if ix == routing.Start(vehicle_id):
+                    continue
                 node = manager.IndexToNode(ix)
                 if node == depot:
                     continue
