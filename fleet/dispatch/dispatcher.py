@@ -40,7 +40,9 @@ class Dispatcher:
         }.get(decision.action)
         result = handler(state, decision) if handler else {"status": "applied"}
         decision.executed_at = state.clock
-        decision.execution_result = result
+        if decision.execution_result is None:
+            decision.execution_result = {}
+        decision.execution_result.update(result)
 
     # ----- per-action handlers (return an audit-friendly result dict) -----
     def _reprioritize(self, state: WorldState, decision: Decision) -> dict:
