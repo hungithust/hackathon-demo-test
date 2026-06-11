@@ -76,6 +76,104 @@ def shortest_path_edges(graph: RoadGraph, source: str, dest: str,
     return path
 
 
+def avoidance_times_from(graph: RoadGraph, source: str,
+                         wade_capability: float,
+                         extra_congestion_factor: float = 100.0) -> Dict[str, float]:
+    """Dijkstra from `source` with `extra_congestion_factor` × penalty on CONGESTED edges.
+    Used for rerouting so the solver strongly avoids jammed roads."""
+    dist: Dict[str, float] = {source: 0.0}
+    pq: List = [(0.0, source)]
+    while pq:
+        d, u = heapq.heappop(pq)
+        if d > dist.get(u, INF):
+            continue
+        for edge in graph.out_edges(u):
+            if not edge.is_passable(wade_capability):
+                continue
+            cost = edge.effective_time
+            if edge.status == EdgeStatus.CONGESTED:
+                cost *= extra_congestion_factor
+            nd = d + cost
+            if nd < dist.get(edge.to_node, INF):
+                dist[edge.to_node] = nd
+                heapq.heappush(pq, (nd, edge.to_node))
+    return dist
+
+
+def shortest_times_from_virtual(
+        graph: RoadGraph,
+        from_node: str,
+        to_node: str,
+        elapsed_min: float,
+        wade_capability: float,
+        extra_congestion_factor: float = 100.0,
+) -> Dict[str, float]:
+    """Dijkstra from a virtual position `elapsed_min` minutes into edge (from_node→to_node).
+
+    Models the physical situation: the vehicle has already traveled `elapsed_min` minutes
+    along the edge and can either:
+      - Turn back toward from_node (cost = elapsed_min, the time already spent)
+      - Continue forward to to_node (cost accounts for remaining jam portion)
+
+    The forward path through a congested edge incurs extra_congestion_factor so
+    the nearest-neighbour algorithm will naturally choose to go back and reroute."""
+    # Find the best passable direct edge from_node -> to_node
+    edge = None
+    for e in graph.out_edges(from_node):
+        if e.to_node == to_node and e.is_passable(wade_capability):
+            if edge is None or e.effective_time < edge.effective_time:
+                edge = e
+
+    # Cost to return to from_node (already traveled section, no extra penalty)
+    cost_to_from = elapsed_min
+
+    if edge is None:
+        # No direct edge found; start from from_node at cost elapsed_min
+        dist: Dict[str, float] = {from_node: cost_to_from}
+        pq: List = [(cost_to_from, from_node)]
+    else:
+        # Compute cost to continue forward to to_node through remaining edge sections
+        cong_start_min = edge.congestion_start_frac * edge.base_time_minutes
+        cong_end_min = edge.congestion_end_frac * edge.base_time_minutes
+
+        if elapsed_min <= cong_start_min:
+            # Vehicle is still before the jam start — cost = uncongested run-up + jammed
+            # segment (penalised) + clear tail
+            uncong_before = cong_start_min - elapsed_min
+            cong_seg = (edge.congestion_end_frac - edge.congestion_start_frac) * edge.base_time_minutes
+            cong_cost = cong_seg * edge.traffic_factor
+            if extra_congestion_factor > 1.0 and edge.status == EdgeStatus.CONGESTED:
+                cong_cost *= extra_congestion_factor
+            after_cong = (1.0 - edge.congestion_end_frac) * edge.base_time_minutes
+            cost_to_dest = (uncong_before + cong_cost + after_cong)
+        else:
+            # Vehicle is already past the jam start: remaining effective time on edge
+            # (this branch reached only when vehicle is not blocked by jam; just use remainder)
+            cost_to_dest = max(0.0, edge.effective_time - elapsed_min)
+
+        flood_pen = 100.0 if edge.flood_level > 0.0 else 1.0
+        cost_to_dest *= flood_pen
+
+        dist = {from_node: cost_to_from, to_node: cost_to_dest}
+        pq = [(cost_to_from, from_node), (cost_to_dest, to_node)]
+
+    while pq:
+        d, u = heapq.heappop(pq)
+        if d > dist.get(u, INF):
+            continue
+        for e in graph.out_edges(u):
+            if not e.is_passable(wade_capability):
+                continue
+            cost = e.effective_time
+            if extra_congestion_factor > 1.0 and e.status == EdgeStatus.CONGESTED:
+                cost *= extra_congestion_factor
+            nd = d + cost
+            if nd < dist.get(e.to_node, INF):
+                dist[e.to_node] = nd
+                heapq.heappush(pq, (nd, e.to_node))
+    return dist
+
+
 def build_time_matrix(graph: RoadGraph, locations: List[str],
                       wade_capability: float,
                       extra_congestion_factor: float = 1.0) -> List[List[float]]:

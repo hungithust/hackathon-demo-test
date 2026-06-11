@@ -277,10 +277,17 @@ class SimulationController:
             else:
                 self._return_context.pop(v.id, None)
 
+        # Draw the moving icon along the SAME path geometry as the vehicle's route
+        # line (_route_path): base-time (ignores disruptions) only while a reroute
+        # is still pending, effective-time (passable, avoids floods/blocks) once it
+        # is approved. Hardcoding use_base=True here made the icon cut straight
+        # through a flooded/blocked area even after its route was rerouted around it.
+        use_base = self._has_pending_reroute(v.id)
+
         stops = sorted(vr.stops, key=lambda s: s.sequence)
         nxt = next((s for s in stops if s.actual_arrival is None), None)
         visited = [s for s in stops if s.actual_arrival is not None]
-        
+
         if nxt is None:
             # Route done (all stops visited). Is it back at depot?
             if v.pos == self.state.depot.location:
@@ -298,7 +305,7 @@ class SimulationController:
                 return default
             span = leg_min * 60.0
             frac = max(0.0, min(1.0, (self.state.clock - from_time).total_seconds() / span))
-            pt = _interp_polyline(self._leg_polyline(from_node, to_node, wade, use_base=True), frac)
+            pt = _interp_polyline(self._leg_polyline(from_node, to_node, wade, use_base=use_base), frac)
             return pt or default
 
         # Otherwise, en route to `nxt`
@@ -317,7 +324,7 @@ class SimulationController:
             from_time = nxt.planned_arrival - timedelta(minutes=eff_leg_min)
         span = eff_leg_min * 60.0
         frac = max(0.0, min(1.0, (self.state.clock - from_time).total_seconds() / span))
-        pt = _interp_polyline(self._leg_polyline(from_node, to_node, wade, use_base=True), frac)
+        pt = _interp_polyline(self._leg_polyline(from_node, to_node, wade, use_base=use_base), frac)
         return pt or default
 
     def _active_edge_ids(self) -> set:
@@ -418,32 +425,53 @@ class SimulationController:
 
     # ----- human-in-the-loop approval -----
     def _handle_sibling_decisions(self, primary_d, status):
-        """Auto-resolve the matching REROUTE decision on the reverse edge so the user
-        doesn't have to click twice for a bidirectional traffic jam."""
+        """Auto-resolve any other pending REROUTE decision on the SAME physical road
+        so the user doesn't have to click twice for a bidirectional / parallel-edge
+        disruption (loop.py now dedups these, but resolve any that slipped through:
+        e.g. queued before the dedup, or forward+reverse of one corridor)."""
         from fleet.contracts.state import DecisionAction
-        if primary_d.action == DecisionAction.REROUTE:
-            ev = next((e for e in self.state.events if e.id == primary_d.event_id), None)
-            if ev and "->" in ev.target:
-                a, b = ev.target.split("->")
-                sibling_target = f"{b}->{a}"
-                for other_d in self.state.get_pending_decisions():
-                    if other_d.id != primary_d.id and other_d.action == DecisionAction.REROUTE:
-                        o_ev = next((e for e in self.state.events if e.id == other_d.event_id), None)
-                        if o_ev and o_ev.target == sibling_target and o_ev.event_type == ev.event_type:
-                            other_d.approval_status = status
-                            other_d.approved_by = "auto-sibling"
-                            other_d.approved_at = self.state.clock
+        from fleet.loop import road_key
+        if primary_d.action != DecisionAction.REROUTE:
+            return
+        ev = next((e for e in self.state.events if e.id == primary_d.event_id), None)
+        if not ev or "->" not in ev.target:
+            return
+        key = road_key(ev.target)
+        for other_d in self.state.get_pending_decisions():
+            if other_d.id == primary_d.id or other_d.action != DecisionAction.REROUTE:
+                continue
+            o_ev = next((e for e in self.state.events if e.id == other_d.event_id), None)
+            if o_ev and "->" in o_ev.target and road_key(o_ev.target) == key:
+                other_d.approval_status = status
+                other_d.approved_by = "auto-sibling"
+                other_d.approved_at = self.state.clock
 
     def approve(self, decision_id: str):
         d = self._find_pending(decision_id)
 
-        # Extract pre-computed targeted plan before dispatcher.apply() overwrites
-        # execution_result.  The plan was computed per-vehicle (only affected
-        # vehicles) so we apply only those routes, leaving others unchanged.
+        # Re-solve the targeted reroute from each affected vehicle's CURRENT
+        # position.  The plan stored when the decision was queued
+        # (_proposed_plan) is stale: the vehicle keeps moving (and may visit more
+        # stops) while the decision waits in the approval queue, so applying that
+        # snapshot would rewind the vehicle's progress and send it back along the
+        # old route — it appears to ignore the reroute entirely.  Recomputing here
+        # reflects where the vehicle actually is now (and correctly skips a vehicle
+        # that has since entered the jam).  The stale snapshot is kept only as a
+        # fallback and still drives the green preview while the decision is pending.
         from fleet.contracts.state import DecisionAction
         proposed_plan = None
         if d.action in (DecisionAction.REROUTE, DecisionAction.RESCHEDULE):
-            proposed_plan = d.impact_estimate.get("_proposed_plan")
+            from fleet.loop import get_affected_vehicle_ids
+            from fleet.routing.planner import preview_reroute_affected
+            ev = next((e for e in self.state.events if e.id == d.event_id), None)
+            stale = d.impact_estimate.get("_proposed_plan") or {}
+            affected_vids = (get_affected_vehicle_ids(self.state, ev)
+                             if ev is not None else list(stale.keys()))
+            if affected_vids:
+                _, proposed_plan = preview_reroute_affected(
+                    self.state, self.components.optimizer, affected_vids)
+            if not proposed_plan:
+                proposed_plan = stale
 
         d.approval_status = ApprovalStatus.APPROVED
         d.approved_by = "human"

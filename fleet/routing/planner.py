@@ -5,13 +5,15 @@ Keeps the loop/agent decoupled from the optimizer impl: they call plan_routes
 with whichever RouteOptimizer the factory selected."""
 
 import datetime
+import heapq
 from typing import List, Tuple, Dict, Optional
 
-from fleet.contracts.state import WorldState, VehicleRoute, Stop
+from fleet.contracts.state import WorldState, VehicleRoute, Stop, EdgeStatus
 from fleet.contracts.interfaces import RouteOptimizer
 from fleet.routing.matrix import (
     build_routing_problem, shortest_times_from, build_time_matrix,
     build_multi_route_matrices, ROUTE_PROFILES,
+    avoidance_times_from, shortest_times_from_virtual,
 )
 
 
@@ -150,6 +152,201 @@ def reroute(state: WorldState, optimizer: RouteOptimizer,
 
 
 # ---------------------------------------------------------------------------
+# Graph-based rerouting helpers (no VRP solver — greedy nearest-neighbour)
+# ---------------------------------------------------------------------------
+
+_INF = float("inf")
+
+
+def _vehicle_current_leg(
+        state: WorldState, vehicle_id: str,
+        depot_id: str = "DEPOT") -> Optional[Tuple[str, str, float]]:
+    """Return (from_node, to_node, elapsed_min) when the vehicle is in transit
+    between two planned locations, else None.
+
+    elapsed_min is the time already spent on the current leg since the vehicle
+    departed from_node. Used to locate the vehicle's physical position on the road
+    and to decide whether it has entered a congested segment."""
+    vehicle = state.get_vehicle(vehicle_id)
+    vr = state.plan.get(vehicle_id)
+    if not vehicle or not vr or not vr.stops:
+        return None
+
+    visited = sorted([s for s in vr.stops if s.actual_arrival is not None],
+                     key=lambda s: s.sequence)
+    unvisited = [s for s in vr.stops if s.actual_arrival is None]
+    if not unvisited:
+        return None
+
+    if visited:
+        last = visited[-1]
+        if last.actual_departure is None:
+            return None  # vehicle is still at a stop serving
+        from_node = last.customer_id
+        from_time = last.actual_departure
+    elif vr.start_time and state.clock > vr.start_time:
+        from_node = depot_id
+        from_time = vr.start_time
+    else:
+        return None  # not yet departed
+
+    to_node = unvisited[0].customer_id
+    elapsed_min = (state.clock - from_time).total_seconds() / 60.0
+    if elapsed_min <= 0:
+        return None
+    return from_node, to_node, elapsed_min
+
+
+def _vehicle_in_jam(
+        state: WorldState, vehicle_id: str,
+        depot_id: str = "DEPOT") -> bool:
+    """True when the vehicle has already entered the congested portion of its
+    current edge and can no longer be rerouted.
+
+    Uses the time-to-jam-start criterion: the uncongested section before the jam
+    is traversed at base speed, so it takes congestion_start_frac × base_time
+    minutes to reach the jam boundary. If elapsed_min >= that threshold, the
+    vehicle is committed."""
+    pos = _vehicle_current_leg(state, vehicle_id, depot_id)
+    if pos is None:
+        return False
+    from_node, to_node, elapsed_min = pos
+    for edge in state.road_graph.out_edges(from_node):
+        if edge.to_node == to_node and edge.status == EdgeStatus.CONGESTED:
+            time_to_jam_start = edge.congestion_start_frac * edge.base_time_minutes
+            if elapsed_min >= time_to_jam_start:
+                return True
+    return False
+
+
+def graph_reroute_vehicle(
+        state: WorldState, vehicle_id: str,
+        depot_id: str = "DEPOT") -> Optional[VehicleRoute]:
+    """Greedy nearest-neighbour reroute for a single vehicle using Dijkstra
+    with 100× avoidance on CONGESTED edges.
+
+    Treats the vehicle's current on-road position as a virtual start node so
+    edge costs are proportional to how much of each segment remains.  Returns
+    None when the vehicle is already inside a jam (requirement 5) or has no
+    pending work."""
+    vehicle = state.get_vehicle(vehicle_id)
+    vr = state.plan.get(vehicle_id)
+    if not vehicle or not vr:
+        return None
+
+    visited = sorted([s for s in vr.stops if s.actual_arrival is not None],
+                     key=lambda s: s.sequence)
+    unvisited = sorted([s for s in vr.stops if s.actual_arrival is None],
+                       key=lambda s: s.sequence)
+    if not unvisited:
+        return None
+
+    # Req 5: vehicle already committed — do not reroute
+    if _vehicle_in_jam(state, vehicle_id, depot_id):
+        return None
+
+    wade = float(vehicle.wade_capability)
+    pos = _vehicle_current_leg(state, vehicle_id, depot_id)
+
+    # A vehicle is "driving" — and therefore committed to its next stop — only
+    # once it has actually served a customer. A vehicle that left DEPOT but has
+    # not reached any customer yet is sent back to DEPOT on approval (see
+    # SimulationController.approve), so it must re-plan freely from DEPOT with NO
+    # locked first stop. Otherwise locking the original first stop forces the
+    # vehicle back onto the jammed leg it was trying to avoid (it appears to keep
+    # following the old route). This mirrors build_reroute_problem_for_vehicle.
+    is_driving = bool(
+        visited and visited[-1].actual_departure
+        and state.clock >= visited[-1].actual_departure
+    )
+
+    # First unvisited stop is locked when the vehicle is already en route to it
+    locked_stop: Optional[Stop] = None
+    free_stops: List[Stop] = list(unvisited)
+    if is_driving and unvisited:
+        locked_stop = unvisited[0]
+        free_stops = unvisited[1:]
+
+    # Compute avoidance distances from the vehicle's planning origin: its current
+    # on-road virtual position only while genuinely driving from a served stop;
+    # otherwise from DEPOT (the vehicle returns there before re-planning).
+    if is_driving and pos is not None:
+        from_node, to_node, elapsed_min = pos
+        curr_dists = shortest_times_from_virtual(
+            state.road_graph, from_node, to_node, elapsed_min, wade,
+            extra_congestion_factor=100.0)
+        current_time = state.clock
+    else:
+        if visited:
+            start_node = visited[-1].customer_id
+            start_time = (visited[-1].actual_departure
+                          or visited[-1].actual_arrival
+                          + datetime.timedelta(minutes=10.0))
+        else:
+            start_node = depot_id
+            start_time = vehicle.shift_start or state.depot.opening_time
+        current_time = max(start_time, state.clock)
+        curr_dists = avoidance_times_from(state.road_graph, start_node, wade)
+
+    # ── Build ordered sequence ────────────────────────────────────────────────
+    sequence: List[Stop] = []
+    if locked_stop:
+        sequence.append(locked_stop)
+
+    remaining: Dict[str, Stop] = {s.customer_id: s for s in free_stops}
+
+    # After the locked stop, continue greedy NN from there
+    nn_dists = (avoidance_times_from(state.road_graph, locked_stop.customer_id, wade)
+                if locked_stop
+                else curr_dists)
+
+    while remaining:
+        best_cid = min(remaining, key=lambda cid: nn_dists.get(cid, _INF))
+        if nn_dists.get(best_cid, _INF) >= _INF:
+            # Unreachable: append in original sequence order
+            for s in sorted(remaining.values(), key=lambda s: s.sequence):
+                sequence.append(s)
+            break
+        sequence.append(remaining.pop(best_cid))
+        nn_dists = avoidance_times_from(state.road_graph, best_cid, wade)
+
+    # ── Timestamp each stop ───────────────────────────────────────────────────
+    new_stops: List[Stop] = []
+    offset = len(visited)
+    timing_dists = curr_dists
+    timing_time = current_time
+
+    for k, s in enumerate(sequence, start=1):
+        leg_min = timing_dists.get(s.customer_id, 1.0)
+        arrival = timing_time + datetime.timedelta(minutes=leg_min)
+        c = state.customers.get(s.customer_id)
+        svc = float(getattr(c, "service_time_min", 10.0)) if c else 10.0
+        departure = arrival + datetime.timedelta(minutes=svc)
+        new_stops.append(Stop(
+            customer_id=s.customer_id,
+            sequence=offset + k,
+            planned_arrival=arrival,
+            planned_departure=departure,
+            load_after_stop=s.load_after_stop,
+            demand_kg=s.demand_kg,
+        ))
+        timing_time = departure
+        timing_dists = avoidance_times_from(state.road_graph, s.customer_id, wade)
+
+    if not new_stops:
+        return None
+
+    last_leg = timing_dists.get(depot_id, 0.0)
+    return VehicleRoute(
+        vehicle_id=vehicle_id,
+        stops=visited + new_stops,
+        total_time=0.0,
+        start_time=vr.start_time,
+        end_time=new_stops[-1].planned_departure + datetime.timedelta(minutes=last_leg),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Targeted rerouting: only for vehicles affected by a specific disruption
 # ---------------------------------------------------------------------------
 
@@ -267,105 +464,25 @@ def preview_reroute_affected(
         state: WorldState, optimizer: RouteOptimizer,
         affected_vehicle_ids: List[str],
         depot_id: str = "DEPOT") -> Tuple[List[str], Dict[str, VehicleRoute]]:
-    """Compute new routes for *only* the affected vehicles without touching the
-    rest of the plan.  Each vehicle starts from its current position and visits
-    its original remaining stops via whatever alternative roads now exist (the
-    cost matrix already penalises congested/flooded edges heavily).
+    """Compute new routes for *only* the affected vehicles using graph-based
+    greedy nearest-neighbour (no VRP solver overhead).
 
-    Returns (dropped_customer_ids, proposed_routes_for_affected_vehicles).
-    The caller merges proposed_routes into state.plan selectively."""
+    Vehicles already inside a congested segment are skipped (req 5).
+    Each vehicle's virtual on-road position is used as the start so edge costs
+    are proportional to the remaining distance (req 1).
+
+    Returns (dropped_customer_ids, proposed_routes_for_affected_vehicles)."""
     proposed: Dict[str, VehicleRoute] = {}
-    all_dropped: List[str] = []
 
     for vid in affected_vehicle_ids:
-        problem = build_reroute_problem_for_vehicle(state, vid, depot_id)
-        if problem is None:
+        new_route = graph_reroute_vehicle(state, vid, depot_id)
+        if new_route is None:
+            in_jam = _vehicle_in_jam(state, vid, depot_id)
+
+            print(f"[reroute_affected] {vid}: {'already in jam - skipped' if in_jam else 'no pending work'}")
             continue
+        print(f"[reroute_affected] {vid}: graph reroute -> {len([s for s in new_route.stops if s.actual_arrival is None])} stops remaining")
+        proposed[vid] = new_route
 
-        try:
-            solution = optimizer.solve(problem)
-        except Exception as exc:
-            print(f"[reroute_affected] solver error for {vid}: {exc}")
-            continue
-
-        all_dropped.extend(solution.dropped)
-
-        # Single virtual vehicle keyed "{vid}__reroute".
-        virtual_id = f"{vid}__reroute"
-        merged_solved = list(solution.routes.get(virtual_id, []))
-        merged_solved.sort(key=lambda ss: ss.arrival)
-
-        print(f"[reroute_affected] {vid}: reroute profile -> {len(merged_solved)} stops")
-
-        if not merged_solved:
-            continue
-
-        vehicle = state.get_vehicle(vid)
-        wade = float(vehicle.wade_capability) if vehicle else 0.3
-        vr = state.plan[vid]
-        visited = sorted([s for s in vr.stops if s.actual_arrival is not None],
-                         key=lambda s: s.sequence)
-        unvisited = sorted([s for s in vr.stops if s.actual_arrival is None],
-                           key=lambda s: s.sequence)
-
-        is_driving = False
-        if visited:
-            last = visited[-1]
-            if last.actual_departure and state.clock >= last.actual_departure:
-                is_driving = True
-        # No visited stops → vehicle still at/near DEPOT, allow full re-plan
-
-        locked_stops = []
-        if is_driving and unvisited:
-            locked_stops = [unvisited[0]]
-
-        offset = len(visited) + len(locked_stops)
-
-        # Re-timestamp: walk stops in merged order, computing actual leg times
-        # from the previous location using the most avoidant matrix (factor=100).
-        current_loc = locked_stops[0].customer_id if locked_stops else (
-            visited[-1].customer_id if visited else depot_id)
-        current_time = max(
-            locked_stops[0].planned_departure if locked_stops else (
-                visited[-1].actual_departure
-                if visited and visited[-1].actual_departure
-                else (visited[-1].actual_arrival + datetime.timedelta(minutes=10.0)
-                      if visited else problem.fleet[0].shift_start)
-            ),
-            state.clock,
-        )
-
-        new_stops: List[Stop] = []
-        for k, ss in enumerate(merged_solved, start=1):
-            dist = shortest_times_from(state.road_graph, current_loc, wade)
-            leg_min = dist.get(ss.customer_id, 1.0)
-            arrival = current_time + datetime.timedelta(minutes=leg_min)
-            c = state.customers.get(ss.customer_id)
-            svc = float(getattr(c, "service_time_min", 10.0)) if c else 10.0
-            departure = arrival + datetime.timedelta(minutes=svc)
-            new_stops.append(Stop(
-                customer_id=ss.customer_id,
-                sequence=offset + k,
-                planned_arrival=arrival,
-                planned_departure=departure,
-                load_after_stop=ss.load_after,
-                demand_kg=float(sum(c.orders.values())) if c else 0.0,
-            ))
-            current_loc = ss.customer_id
-            current_time = departure
-
-        last_leg_min = shortest_times_from(
-            state.road_graph, current_loc, wade).get(depot_id, 0.0)
-
-        proposed[vid] = VehicleRoute(
-            vehicle_id=vid,
-            stops=visited + locked_stops + new_stops,
-            total_time=solution.metrics.get("total_time_min", 0.0),
-            start_time=vr.start_time,
-            end_time=(new_stops[-1].planned_departure
-                      + datetime.timedelta(minutes=last_leg_min))
-                     if new_stops else vr.end_time,
-        )
-
-    return all_dropped, proposed
+    return [], proposed
 

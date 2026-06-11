@@ -128,6 +128,55 @@ def build_sample_state(base_time: datetime = datetime(2026, 6, 4, 6, 0), urban_s
     # 6. Explicit demo road C001↔C002 (needed for the fixed traffic jam scenario)
     _bidir("C001", "C002")
 
+    # 7. Synthetic junction branches — extra "ngã ba/ngã tư" bypass routes.
+    #    For a corridor a→b we keep the existing direct edge AND add a parallel
+    #    branch a → JX.. → b made of non-delivery junction nodes, bulged out to
+    #    one side so it forms a visible alternate path. When the direct road is
+    #    jammed/flooded the router detours through these junctions instead of
+    #    having to swing all the way out to another customer. Junctions live only
+    #    in the road graph (never in `customers`), so the VRP never treats them as
+    #    delivery stops — Dijkstra/the cost matrix just travels through them.
+    _jseq = [0]
+
+    def _add_branch(a: str, b: str, n_mid: int = 2,
+                    offset_frac: float = 0.35, side: int = 1) -> None:
+        la, lb = nodes[a].location, nodes[b].location
+        dlat, dlng = lb.lat - la.lat, lb.lng - la.lng
+        length = math.hypot(dlat, dlng) or 1e-9
+        # unit vector perpendicular to the a→b line, on the chosen side
+        plat, plng = (-dlng / length) * side, (dlat / length) * side
+        chain = [a]
+        for k in range(1, n_mid + 1):
+            t = k / (n_mid + 1)
+            bulge = math.sin(t * math.pi) * length * offset_frac   # taper to 0 at ends
+            jlat = la.lat + dlat * t + plat * bulge
+            jlng = la.lng + dlng * t + plng * bulge
+            _jseq[0] += 1
+            jid = f"JX{_jseq[0]:02d}"
+            label = f"Ngã rẽ {jid}"
+            nodes[jid] = RoadNode(jid, Location(jlat, jlng, label, label))
+            adjacency[jid] = []
+            chain.append(jid)
+        chain.append(b)
+        for u, w in zip(chain[:-1], chain[1:]):
+            _bidir(u, w)
+
+    # A mix of DEPOT→customer and customer→customer corridors. DEPOT→C001 is the
+    # fixed demo jam corridor (matches the example sketch). Sides alternate so the
+    # branches don't overlap on the map.
+    branch_corridors = [
+        ("DEPOT", "C001", 2),   # fixed demo jam corridor (example image)
+        ("DEPOT", "C003", 2),
+        ("DEPOT", "C007", 2),
+        ("C001", "C002", 2),
+        ("C004", "C009", 1),
+        ("C006", "C010", 2),
+        ("C002", "C005", 1),
+    ]
+    for i, (a, b, nmid) in enumerate(branch_corridors):
+        if a in nodes and b in nodes:
+            _add_branch(a, b, n_mid=nmid, side=1 if i % 2 == 0 else -1)
+
     # Initial flood on the C005↔C006 direct edge so there's a visible flood marker
     # from the start.  Both nodes still reachable via DEPOT direct or junction bypass.
     for eid in ["C005->C006", "C006->C005"]:
