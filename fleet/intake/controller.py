@@ -42,6 +42,12 @@ class IntakeController:
         except Exception:
             reports = []
 
+        # Voice/field intake only drives reroute-class disruptions (flood/traffic).
+        # Other event types (breakdown->REALLOCATE, urgent->REPRIORITIZE, ...) are
+        # intentionally dropped: their approval path triggers a full fleet re-solve
+        # (controller.approve has no targeted plan for them), which scrambles routes.
+        reports = [r for r in reports if r.event_type in _EDGE_EVENTS]
+
         injected = []
         for r in reports:
             if r.event_type in _EDGE_EVENTS:

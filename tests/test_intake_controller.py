@@ -22,17 +22,16 @@ def _fake_complete(reports):
     return lambda system, user: {"reports": reports}
 
 
-def test_text_report_injects_node_event_and_decides():
+def test_non_edge_reports_are_dropped():
+    # Voice/field intake only drives reroute-class disruptions (flood/traffic).
+    # Non-edge events (shortage/breakdown/urgent) are intentionally dropped so they
+    # never reach the full-reroute approval path that scrambles routes.
     sim = SimulationController()
     ic = IntakeController(sim, complete=_fake_complete([
         {"event_type": "inventory_shortage", "target_hint": "C001",
          "severity": "high"}]))
     result = ic.report(text="kho C001 het hang")
-    assert len(result.injected_event_ids) == 1
-    evt_id = result.injected_event_ids[0]
-    # event landed in the world and the pipeline produced a decision for it
-    assert any(e.id == evt_id for e in sim.state.events)
-    assert any(d.event_id == evt_id for d in sim.state.decisions)
+    assert result.reports == [] and result.injected_event_ids == []
 
 
 def test_edge_report_uses_disrupt_edge():
@@ -50,12 +49,13 @@ def test_audio_path_transcribes_then_injects():
     ic = IntakeController(
         sim,
         complete=_fake_complete([
-            {"event_type": "vehicle_breakdown", "target_hint": "xe 3",
-             "severity": "high"}]),
-        transcriber=type("T", (), {"transcribe": lambda self, a, l: "xe 3 hong"})())
+            {"event_type": "flooded_area", "target_hint": "duong vao C001",
+             "severity": "high", "edge_status": "flooded", "flood_level": 0.6}]),
+        transcriber=type("T", (), {"transcribe": lambda self, a, l: "duong vao C001 ngap"})())
     result = ic.report(audio=b"\x00\x01")
-    assert result.raw_text == "xe 3 hong"
+    assert result.raw_text == "duong vao C001 ngap"
     assert len(result.injected_event_ids) == 1
+    assert sim.state.road_graph.get_edge("DEPOT->C001").status == EdgeStatus.FLOODED
 
 
 def test_bad_json_returns_empty_result_no_crash():
