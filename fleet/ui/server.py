@@ -15,6 +15,7 @@ the original Streamlit model. POST /api/reset rebuilds it.
 import re
 import shutil
 import subprocess
+import threading
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -34,6 +35,12 @@ app = FastAPI(title="FleetOps Control Room")
 
 # Single shared session (rebuilt by /api/reset).
 _ctrl = SimulationController()
+
+# Serialize every request that touches the shared session.  FastAPI runs sync
+# endpoints in a threadpool, so without this an approve / step / report could
+# mutate state.decisions / state.plan concurrently — corrupting the snapshot
+# (e.g. a decision that survives approval, or a scrambled re-solve).
+_lock = threading.Lock()
 
 # Settings overrides applied via the UI ({} == all defaults from os.environ).
 _overrides: dict = {}
@@ -113,34 +120,38 @@ class SettingsBody(BaseModel):
 
 @app.get("/api/snapshot")
 def get_snapshot():
-    return _controller().snapshot()
+    with _lock:
+        return _controller().snapshot()
 
 
 @app.post("/api/step")
 def post_step(body: StepBody):
-    c = _controller()
-    c.step(max(1, min(int(body.n), 50)))
-    return c.snapshot()
+    with _lock:
+        c = _controller()
+        c.step(max(1, min(int(body.n), 50)))
+        return c.snapshot()
 
 
 @app.post("/api/approve/{decision_id}")
 def post_approve(decision_id: str):
-    c = _controller()
-    try:
-        c.approve(decision_id)
-    except KeyError:
-        raise HTTPException(status_code=404, detail="no such pending decision")
-    return c.snapshot()
+    with _lock:
+        c = _controller()
+        try:
+            c.approve(decision_id)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="no such pending decision")
+        return c.snapshot()
 
 
 @app.post("/api/reject/{decision_id}")
 def post_reject(decision_id: str):
-    c = _controller()
-    try:
-        c.reject(decision_id)
-    except KeyError:
-        raise HTTPException(status_code=404, detail="no such pending decision")
-    return c.snapshot()
+    with _lock:
+        c = _controller()
+        try:
+            c.reject(decision_id)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="no such pending decision")
+        return c.snapshot()
 
 
 def _report_payload(result, c) -> dict:
@@ -155,11 +166,12 @@ def _report_payload(result, c) -> dict:
 
 @app.post("/api/report")
 def post_report(body: ReportBody):
-    c = _controller()
-    ic = IntakeController(c, complete=_intake_complete(c.settings),
-                          transcriber=build_transcriber(c.settings))
-    result = ic.report(text=body.text or None)
-    return _report_payload(result, c)
+    with _lock:
+        c = _controller()
+        ic = IntakeController(c, complete=_intake_complete(c.settings),
+                              transcriber=build_transcriber(c.settings))
+        result = ic.report(text=body.text or None)
+        return _report_payload(result, c)
 
 
 def _transcode_to_pcm16(raw: bytes, rate: int = 16000) -> bytes:
@@ -182,7 +194,9 @@ def _transcode_to_pcm16(raw: bytes, rate: int = 16000) -> bytes:
 
 
 @app.post("/api/report_audio")
-async def post_report_audio(audio: UploadFile = File(...), lang: str = "en-US"):
+def post_report_audio(audio: UploadFile = File(...), lang: str = "en-US"):
+    # Sync endpoint (runs in the threadpool) so the slow ffmpeg + ASR work happens
+    # WITHOUT holding _lock; only the world mutation below is serialized.
     c = _controller()
     transcriber = build_transcriber(c.settings)
     if transcriber.__class__.__name__ == "NullTranscriber":
@@ -190,11 +204,12 @@ async def post_report_audio(audio: UploadFile = File(...), lang: str = "en-US"):
             status_code=503,
             detail="ASR is disabled. Start the server with ASR_ENGINE=riva and "
                    "RIVA_ENDPOINT set (or ASR_ENGINE=whisper).")
-    pcm = _transcode_to_pcm16(await audio.read())
-    ic = IntakeController(c, complete=_intake_complete(c.settings),
-                          transcriber=transcriber)
-    result = ic.report(audio=pcm, lang=lang)
-    return _report_payload(result, c)
+    pcm = _transcode_to_pcm16(audio.file.read())
+    raw = transcriber.transcribe(pcm, lang)        # slow; kept outside the lock
+    with _lock:
+        ic = IntakeController(c, complete=_intake_complete(c.settings))
+        result = ic.report(text=raw or None, lang=lang)
+        return _report_payload(result, c)
 
 
 @app.get("/api/settings")
@@ -221,16 +236,18 @@ def post_settings(body: SettingsBody):
         new_settings = settings_schema.apply(merged)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    _overrides = merged
-    _ctrl = SimulationController(settings=new_settings)
-    return _ctrl.snapshot()
+    with _lock:
+        _overrides = merged
+        _ctrl = SimulationController(settings=new_settings)
+        return _ctrl.snapshot()
 
 
 @app.post("/api/reset")
 def post_reset():
     global _ctrl
-    _ctrl = SimulationController(settings=_build_settings())
-    return _ctrl.snapshot()
+    with _lock:
+        _ctrl = SimulationController(settings=_build_settings())
+        return _ctrl.snapshot()
 
 
 # ---------------- static web app ----------------

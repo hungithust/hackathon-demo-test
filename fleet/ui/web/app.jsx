@@ -16,6 +16,17 @@ function App() {
   const tick = React.useRef(null);
   const inflight = React.useRef(false);
 
+  // Serialize every backend call. All mutations hit the same shared session, so a
+  // Play-loop step must never overlap an approve/report — otherwise a stale step
+  // snapshot (taken before the approve) can land last and resurrect a decision the
+  // user already approved ("approve doesn't stick"). Manual actions wait their turn;
+  // the Play loop simply skips a tick while something else is in flight.
+  const runExclusive = async (fn) => {
+    while (inflight.current) await new Promise((r) => setTimeout(r, 25));
+    inflight.current = true;
+    try { return await fn(); } finally { inflight.current = false; }
+  };
+
   // apply a fresh snapshot, flagging newly-arrived items so they flash once
   const apply = (next) => setState((prev) => markNew(prev, next));
 
@@ -41,10 +52,8 @@ function App() {
   React.useEffect(() => {
     if (!playing) { clearInterval(tick.current); return; }
     tick.current = setInterval(async () => {
-      if (inflight.current) return;
-      inflight.current = true;
-      try { apply(await Api.step(1)); } catch (e) { console.error(e); }
-      finally { inflight.current = false; }
+      if (inflight.current) return;   // skip this tick; something else is running
+      try { apply(await runExclusive(() => Api.step(1))); } catch (e) { console.error(e); }
     }, SPEED_MS[speed] || 1100);
     return () => clearInterval(tick.current);
   }, [playing, speed]);
@@ -52,7 +61,7 @@ function App() {
   const guard = async (fn) => {
     if (busy) return;
     setBusy(true);
-    try { apply(await fn()); } catch (e) { console.error(e); } finally { setBusy(false); }
+    try { apply(await runExclusive(fn)); } catch (e) { console.error(e); } finally { setBusy(false); }
   };
 
   const doStep = (n) => guard(() => Api.step(n));
@@ -61,14 +70,14 @@ function App() {
   const onReject = (id) => guard(() => Api.reject(id));
 
   const onReport = async (raw) => {
-    const res = await Api.report(raw);
+    const res = await runExclusive(() => Api.report(raw));
     apply(res.state);
     if (res.decisions && res.decisions.length) setQueueView("pending");
     return res; // { raw, reports, decisions, state }
   };
 
   const onReportAudio = async (blob) => {
-    const res = await Api.reportAudio(blob);
+    const res = await runExclusive(() => Api.reportAudio(blob));
     apply(res.state);
     if (res.decisions && res.decisions.length) setQueueView("pending");
     return res;
