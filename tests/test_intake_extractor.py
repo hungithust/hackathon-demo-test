@@ -25,7 +25,7 @@ def test_parse_splits_multiple_reports():
     assert len(reports) == 2
     flood = reports[0]
     assert flood.event_type == EventType.FLOODED_AREA
-    assert flood.target == "DEPOT->C001#2"
+    assert flood.target == "DEPOT->C001"
     assert flood.edge_status == EdgeStatus.FLOODED and flood.flood_level == 0.6
     veh = reports[1]
     assert veh.event_type == EventType.VEHICLE_BREAKDOWN and veh.target == "V003"

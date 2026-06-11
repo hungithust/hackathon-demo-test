@@ -41,7 +41,7 @@ def test_edge_report_uses_disrupt_edge():
         {"event_type": "flooded_area", "target_hint": "duong vao C001",
          "severity": "high", "edge_status": "flooded", "flood_level": 0.6}]))
     ic.report(text="duong vao C001 ngap")
-    edge = sim.state.road_graph.get_edge("DEPOT->C001#2")
+    edge = sim.state.road_graph.get_edge("DEPOT->C001")
     assert edge.status == EdgeStatus.FLOODED and edge.flood_level == 0.6
 
 
