@@ -260,20 +260,45 @@ class SimulationController:
                         return True
         return False
 
+    def _has_approved_reroute(self, vehicle_id: str) -> bool:
+        """True only when this vehicle has an APPROVED reroute for a still-active
+        disruption — the single condition under which it may leave its committed
+        road and follow the detour.
+
+        A reroute happens ONLY after human approval: while a decision is merely
+        pending (or was rejected, or auto-cancelled because the vehicle already
+        entered the jam) the vehicle must keep driving its original route through
+        the jam.  Scoping to active events means a new jam never inherits an old
+        approval — the vehicle stays on the new jammed road until that one is
+        approved too."""
+        from fleet.contracts.state import DecisionAction, ApprovalStatus
+        active_event_ids = {e.id for e in self.state.get_active_events()}
+        for d in self.state.decisions:
+            if (d.action in (DecisionAction.REROUTE, DecisionAction.RESCHEDULE)
+                    and d.approval_status == ApprovalStatus.APPROVED
+                    and d.event_id in active_event_ids
+                    and d.execution_result
+                    and vehicle_id in d.execution_result.get("proposed_routes", {})):
+                return True
+        return False
+
     def _route_path(self, v) -> List[List[float]]:
         """Whole planned route as one [[lng,lat]...] polyline along real roads.
 
-        While a reroute decision is pending: use base_time (ignores disruptions)
-        so the blue route stays on its original path through the affected area,
-        contrasting visibly with the green proposed-reroute overlay.
+        Until a reroute is APPROVED: use base_time (ignores disruptions) so the
+        blue route stays on its original committed road through the affected area,
+        contrasting visibly with the green proposed-reroute overlay. This holds
+        while the decision is pending, and also if it was rejected or auto-cancelled
+        because the vehicle already entered the jam (then it must finish on the
+        original route).
 
-        After approval (no pending decision): switch to effective_time so the
-        blue route follows the newly approved detour around the disruption."""
+        Only after approval (for a still-active disruption): switch to effective_time
+        so the blue route follows the approved detour around the disruption."""
         route_nodes = self._route_nodes(v.id)
         if len(route_nodes) < 2:
             return []
         wade = float(v.wade_capability)
-        use_base = self._has_pending_reroute(v.id)
+        use_base = not self._has_approved_reroute(v.id)
         out: List[List[float]] = []
         for a, b in zip(route_nodes[:-1], route_nodes[1:]):
             for (lat, lng) in self._leg_polyline(a, b, wade, use_base=use_base):
@@ -308,11 +333,12 @@ class SimulationController:
                 self._return_context.pop(v.id, None)
 
         # Draw the moving icon along the SAME path geometry as the vehicle's route
-        # line (_route_path): base-time (ignores disruptions) only while a reroute
-        # is still pending, effective-time (passable, avoids floods/blocks) once it
-        # is approved. Hardcoding use_base=True here made the icon cut straight
-        # through a flooded/blocked area even after its route was rerouted around it.
-        use_base = self._has_pending_reroute(v.id)
+        # line (_route_path): base-time (original committed road) until the reroute
+        # is APPROVED, effective-time (passable, avoids floods/blocks) only once it
+        # is approved for a still-active disruption. Using "approved" (not merely
+        # "no longer pending") keeps the icon on the jammed road when the reroute is
+        # pending/rejected/auto-cancelled, instead of detouring without approval.
+        use_base = not self._has_approved_reroute(v.id)
 
         stops = sorted(vr.stops, key=lambda s: s.sequence)
         nxt = next((s for s in stops if s.actual_arrival is None), None)
