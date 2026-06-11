@@ -58,7 +58,9 @@ def to_cuopt_request(problem: RoutingProblem) -> dict:
     veh_locations, cap_row, vtws, veh_types = [], [], [], []
     for f in problem.fleet:
         start_loc_idx = problem.locations.index(f.start_location or problem.depot_id)
-        veh_locations.append([start_loc_idx, depot])
+        end_loc_idx = problem.locations.index(
+            f.end_location or f.start_location or problem.depot_id)
+        veh_locations.append([start_loc_idx, end_loc_idx])
         cap_row.append(int(round(f.capacity_kg)))
         vtws.append([mins(f.shift_start), mins(f.shift_end)])
         veh_types.append(type_keys[f.veh_type])
@@ -196,7 +198,7 @@ class CuOptAdapter:
                 raise RuntimeError("API cuOpt không trả về reqId.")
 
             # Chờ kết quả (Polling)
-            max_retries = 30
+            max_retries = 450  # 450 attempts * 2s = 900s = 15 phút
             for attempt in range(max_retries):
                 try:
                     sol_response = requests.get(f"{solution_url}/{req_id}", timeout=10)

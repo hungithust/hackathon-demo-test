@@ -226,6 +226,261 @@ def build_sample_state(base_time: datetime = datetime(2026, 6, 4, 6, 0), urban_s
     return state
 
 
+def build_multidepot_state(
+        n_depots: int = 5,
+        vehicles_per_depot: int = 10,
+        customers_per_depot: int = 10,
+        base_time: datetime = datetime(2026, 6, 4, 6, 0),
+        urban_speed_kmh: float = 25.0,
+        seed: int = 7,
+) -> WorldState:
+    """True multi-depot demo world: ``n_depots`` warehouses, each owning
+    ``vehicles_per_depot`` vehicles and serving its own cluster of
+    ``customers_per_depot`` delivery points. Every vehicle departs from and
+    returns to its home depot (Vehicle.home_depot), so the VRP is genuinely
+    multi-depot — not a single hub.
+
+    Defaults give 5 depots × 10 vehicles (50 trucks) and 50 customers.
+
+    Topology (deterministic from ``seed``):
+      • Depots sit close together on a small ring near the HCM centre, every depot
+        linked to every other (short inter-depot arteries).
+      • Each depot's customer cluster sits FAR out in that depot's direction, so the
+        depot→delivery legs are long and clearly visible (routes, jams, detours).
+      • Every depot has a direct road to EVERY customer, so the cost matrix carries a
+        real travel time for every (depot, point) pair and any depot can serve any
+        point.
+      • Delivery points are scattered (with a minimum separation) across a wide disc
+        around the centre — not tight per-depot clumps — so the map reads like a real
+        city with dispersed stops and crossing roads. Each point's home depot is just
+        its nearest depot.
+      • Each customer links to its 2 globally-nearest neighbours, so neighbouring
+        stops (possibly served by different depots) are connected and a blocked
+        depot→Ci road has a customer-to-customer bypass.
+    """
+    import math
+    import random as _random
+
+    rng = _random.Random(seed)
+    center_lat, center_lng = 10.7760, 106.7000
+    depot_radius = 0.022       # ~2.4 km centre→depot: depots clustered close together
+    cust_r_min, cust_r_max = 0.045, 0.190   # ~5–21 km: stops spread far across a wide disc
+    bc_candidates = 24         # best-candidate samples/point → even (blue-noise) spacing
+
+    # ── Depots on a small ring near the centre ────────────────────────────────
+    depots: Dict[str, Depot] = {}
+    depot_locs: Dict[str, Location] = {}
+    for d in range(n_depots):
+        did = f"D{d + 1}"
+        angle = 2.0 * math.pi * d / n_depots
+        dlat = center_lat + depot_radius * math.cos(angle)
+        dlng = center_lng + depot_radius * math.sin(angle) * 1.05
+        loc = Location(dlat, dlng, f"Kho {did} HCM", f"Kho {did}")
+        depot_locs[did] = loc
+        depots[did] = Depot(
+            location=loc,
+            inventory={"SKU001": 5000, "SKU002": 3000, "SKU003": 4000},
+            opening_time=base_time,
+            closing_time=base_time + timedelta(hours=12),
+            id=did,
+        )
+
+    # ── Vehicles: vehicles_per_depot per depot, home_depot set ────────────────
+    vehicles: Dict[str, Vehicle] = {}
+    vnum = 0
+    for did in depots:
+        for _ in range(vehicles_per_depot):
+            vnum += 1
+            vid = f"V{vnum:03d}"
+            vehicles[vid] = Vehicle(
+                id=vid, capacity_kg=500, pos=depot_locs[did], current_load_kg=0,
+                status=VehicleStatus.AT_DEPOT,
+                shift_start=base_time, shift_end=base_time + timedelta(hours=48),
+                veh_type="truck", wade_capability=0.3, home_depot=did,
+            )
+
+    # ── Customers scattered across a wide disc (area-uniform), kept min_sep apart ─
+    skus = ["SKU001", "SKU002", "SKU003"]
+    customers: Dict[str, CustomerProfile] = {}
+    cluster_of: Dict[str, str] = {}   # customer id -> home depot id (nearest depot)
+    placed: List[Tuple[float, float]] = []
+    total_customers = n_depots * customers_per_depot
+
+    def _sample_point() -> Tuple[float, float]:
+        ang = rng.uniform(0.0, 2.0 * math.pi)
+        r = cust_r_min + (cust_r_max - cust_r_min) * math.sqrt(rng.random())  # area-uniform
+        return (center_lat + r * math.cos(ang), center_lng + r * math.sin(ang) * 1.05)
+
+    for cnum in range(1, total_customers + 1):
+        cid = f"C{cnum:03d}"
+        # Mitchell best-candidate: of bc_candidates random points, keep the one
+        # farthest from all already-placed stops → even blue-noise spread (no clumps,
+        # large gaps), so the roads between stops are long and clearly visible.
+        if not placed:
+            lat, lng = _sample_point()
+        else:
+            best, best_d = None, -1.0
+            for _ in range(bc_candidates):
+                clat, clng = _sample_point()
+                d = min(math.hypot(clat - pl, clng - pn) for pl, pn in placed)
+                if d > best_d:
+                    best_d, best = d, (clat, clng)
+            lat, lng = best
+        placed.append((lat, lng))
+        n_sku = rng.randint(1, 2)
+        orders = {sku: rng.randint(5, 25) for sku in rng.sample(skus, n_sku)}
+        prio = rng.randint(1, 4)
+        tw_e = rng.uniform(3.0, 6.0)
+        sla_h = tw_e + rng.uniform(0.5, 1.5)
+        customers[cid] = CustomerProfile(
+            id=cid, type="store",
+            location=Location(lat, lng, f"Điểm giao {cid}", f"Điểm giao {cid}"),
+            orders=orders,
+            time_window=TimeWindow(base_time, base_time + timedelta(hours=tw_e * 10)),
+            priority=prio,
+            sla_deadline=base_time + timedelta(hours=sla_h * 10),
+        )
+        # home depot = nearest depot
+        cluster_of[cid] = min(
+            depots, key=lambda d: math.hypot(lat - depot_locs[d].lat,
+                                             lng - depot_locs[d].lng))
+
+    # ── Road network ──────────────────────────────────────────────────────────
+    nodes: Dict[str, RoadNode] = {}
+    for did, loc in depot_locs.items():
+        nodes[did] = RoadNode(did, loc)
+    for cid, c in customers.items():
+        nodes[cid] = RoadNode(cid, c.location)
+
+    def straight_km(a: str, b: str) -> float:
+        la, lb = nodes[a].location, nodes[b].location
+        return math.hypot(la.lat - lb.lat, la.lng - lb.lng) * 111.0
+
+    edges: Dict[str, RoadEdge] = {}
+    adjacency: Dict[str, list] = {n: [] for n in nodes}
+
+    def _add_edge(a: str, b: str) -> None:
+        km = straight_km(a, b)
+        mins = km * 60.0 / urban_speed_kmh
+        e = RoadEdge(a, b, km, mins)
+        if e.id not in edges:
+            edges[e.id] = e
+            adjacency[a].append(e.id)
+
+    def _bidir(a: str, b: str) -> None:
+        _add_edge(a, b)
+        _add_edge(b, a)
+
+    # 1. Inter-depot arteries (full mesh keeps the graph connected)
+    depot_ids = list(depots)
+    for i in range(len(depot_ids)):
+        for j in range(i + 1, len(depot_ids)):
+            _bidir(depot_ids[i], depot_ids[j])
+
+    # 2. Every depot ↔ EVERY customer (direct delivery roads). This gives the cost
+    #    matrix a real travel time for every (depot, point) pair, so any depot can
+    #    serve any point; the home-cluster road is short, cross-cluster roads long.
+    by_cluster: Dict[str, list] = {did: [] for did in depots}
+    for cid, did in cluster_of.items():
+        by_cluster[did].append(cid)
+        # Giữ lại đường nối với Depot gần nhất để đảm bảo luôn có ít nhất 1 đường về Depot
+        _bidir(did, cid)
+
+    # 3. K-nearest customer↔customer edges: connect each delivery point to its 3 closest neighbours
+    #    to keep the graph sparse (around 200 edges) and visually readable, while ensuring connectivity.
+    all_cids = list(customers)
+    for cid in all_cids:
+        others = [c for c in all_cids if c != cid]
+        others.sort(key=lambda c: straight_km(cid, c))
+        for other in others[:3]:
+            _bidir(cid, other)
+
+    # 4. Synthetic junction branches — parallel "ngã ba/ngã tư" bypass routes, like
+    #    build_sample_state. For a corridor a→b we keep the direct edge AND add a
+    #    branch a → JX.. → b bulged to one side, so a jam/flood on the direct road
+    #    has a visible detour through non-delivery junction nodes (never in
+    #    `customers`, so the VRP only travels through them).
+    _jseq = [0]
+
+    def _add_branch(a: str, b: str, n_mid: int = 2,
+                    offset_frac: float = 0.35, side: int = 1) -> None:
+        la, lb = nodes[a].location, nodes[b].location
+        dlat, dlng = lb.lat - la.lat, lb.lng - la.lng
+        length = math.hypot(dlat, dlng) or 1e-9
+        plat, plng = (-dlng / length) * side, (dlat / length) * side
+        chain = [a]
+        for k in range(1, n_mid + 1):
+            t = k / (n_mid + 1)
+            bulge = math.sin(t * math.pi) * length * offset_frac
+            jlat = la.lat + dlat * t + plat * bulge
+            jlng = la.lng + dlng * t + plng * bulge
+            _jseq[0] += 1
+            jid = f"JX{_jseq[0]:02d}"
+            nodes[jid] = RoadNode(jid, Location(jlat, jlng, f"Ngã rẽ {jid}", f"Ngã rẽ {jid}"))
+            adjacency[jid] = []
+            chain.append(jid)
+        chain.append(b)
+        for u, w in zip(chain[:-1], chain[1:]):
+            _bidir(u, w)
+
+    # 5. Per cluster: a detour waypoint (W) on the depot→nearest-customer road plus
+    #    a couple of junction branches, mirroring the sample world's "đường vòng".
+    wseq = 0
+    for i, (did, cids) in enumerate(by_cluster.items()):
+        if not cids:
+            continue
+        dloc = depot_locs[did]
+        by_near = sorted(cids, key=lambda c: straight_km(did, c))
+        cnear = by_near[0]
+
+        # Detour waypoint at frac 0.8 along depot→cnear: depot→W is the clear first
+        # leg; W→cnear is a 1.3× side-road that bypasses a jam on the direct road.
+        wseq += 1
+        wid = f"W{wseq:03d}"
+        t = 0.8
+        cloc = customers[cnear].location
+        w_lat = dloc.lat + (cloc.lat - dloc.lat) * t
+        w_lng = dloc.lng + (cloc.lng - dloc.lng) * t
+        nodes[wid] = RoadNode(wid, Location(w_lat, w_lng, f"Điểm rẽ {wid}", f"Điểm rẽ {wid}"))
+        adjacency[wid] = []
+        _bidir(did, wid)
+        det_km = straight_km(wid, cnear) * 1.3
+        det_min = det_km * 60.0 / urban_speed_kmh
+        for a, b in ((wid, cnear), (cnear, wid)):
+            e = RoadEdge(a, b, det_km, det_min)
+            if e.id not in edges:
+                edges[e.id] = e
+                adjacency[a].append(e.id)
+
+        # A junction branch on depot→2nd-nearest customer, and one on an intra-cluster pair.
+        if len(by_near) >= 2:
+            _add_branch(did, by_near[1], n_mid=2, side=1 if i % 2 == 0 else -1)
+        if len(cids) >= 2:
+            _add_branch(cids[0], cids[1], n_mid=1, side=-1 if i % 2 == 0 else 1)
+
+    # 6. Initial flood per cluster on a customer↔customer edge (both endpoints stay
+    #    reachable via their direct depot road or the junction branch added above),
+    #    so the map shows flood markers with a real detour from tick 0.
+    for did, cids in by_cluster.items():
+        if len(cids) >= 2:
+            for eid in (f"{cids[0]}->{cids[1]}", f"{cids[1]}->{cids[0]}"):
+                if eid in edges:
+                    edges[eid].status = EdgeStatus.FLOODED
+                    edges[eid].flood_level = 0.5
+
+    primary = depots[depot_ids[0]]
+    state = WorldState(
+        clock=base_time,
+        depot=primary,                 # back-compat primary (shared inventory/hours)
+        customers=customers,
+        vehicles=vehicles,
+        depots=depots,
+        road_graph=RoadGraph(nodes=nodes, edges=edges, adjacency=adjacency),
+    )
+    state.events.extend(RuleDetector().detect(state))
+    return state
+
+
 def build_real_state(graph, customers: Optional[List[tuple]] = None,
                      base_time: datetime = datetime(2026, 6, 4, 6, 0),
                      urban_speed_kmh: float = 25.0,

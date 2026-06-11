@@ -261,7 +261,15 @@ def build_routing_problem(state: WorldState,
     """
     pending = [cid for cid in sorted(state.customers)
                if sum(state.customers[cid].orders.values()) > 0]
-    locations = [depot_id] + pending
+    # All depot nodes lead the location list (multi-depot worlds have >1). Guard
+    # against a caller's default depot_id (e.g. "DEPOT") that isn't a real depot in
+    # this world — fall back to the primary depot so no phantom node is created.
+    all_depots = state.all_depots()
+    if depot_id not in all_depots:
+        depot_id = state.depot.id
+    # The chosen depot_id stays first so RoutingProblem.depot_id keeps its meaning.
+    depot_ids = [depot_id] + [d for d in all_depots if d != depot_id]
+    locations = depot_ids + pending
 
     # broken / in-maintenance vehicles can't take new work -> excluded from the solve.
     available = [v for v in state.vehicles.values()
@@ -271,9 +279,11 @@ def build_routing_problem(state: WorldState,
     
     fleet_params = []
     for v in available:
-        start_loc = depot_id
-        avail_time = v.shift_start or state.depot.opening_time
-        
+        home = v.home_depot if v.home_depot in state.all_depots() else depot_id
+        v_depot = state.depot_of(v)
+        start_loc = home
+        avail_time = v.shift_start or v_depot.opening_time
+
         if v.route and v.route.stops:
             visited = [s for s in v.route.stops if s.actual_arrival is not None]
         else:
@@ -304,7 +314,7 @@ def build_routing_problem(state: WorldState,
                 # Vehicle might be en route to its first stop
                 first_stop = v.route.stops[0]
                 from datetime import timedelta
-                dist = shortest_times_from(state.road_graph, depot_id, float(v.wade_capability))
+                dist = shortest_times_from(state.road_graph, home, float(v.wade_capability))
                 if first_stop.customer_id in dist:
                     dep_time = first_stop.planned_arrival - timedelta(minutes=dist[first_stop.customer_id])
                     if state.clock > dep_time:
@@ -322,8 +332,8 @@ def build_routing_problem(state: WorldState,
         
         fleet_params.append({
             "id": v.id, "capacity_kg": v.capacity_kg, "veh_type": v.veh_type,
-            "shift_start": avail_time, "shift_end": v.shift_end or state.depot.closing_time,
-            "start_location": start_loc
+            "shift_start": avail_time, "shift_end": v.shift_end or v_depot.closing_time,
+            "start_location": start_loc, "end_location": home,
         })
 
     # Ensure all start locations are in the problem locations

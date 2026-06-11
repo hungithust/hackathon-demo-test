@@ -8,7 +8,7 @@ from datetime import timedelta
 from typing import Dict, List, Optional, Tuple
 
 from fleet.contracts.state import ApprovalStatus, VehicleStatus
-from fleet.scenarios import build_sample_state, build_real_state
+from fleet.scenarios import build_sample_state, build_real_state, build_multidepot_state
 from fleet.factory import build_components
 from fleet.dispatch.dispatcher import RESOLVE_ACTIONS
 from fleet.routing.planner import reroute, plan_total_minutes
@@ -51,6 +51,9 @@ class SimulationController:
             self.state = state
         elif getattr(self.settings, "world", "sample") == "real":
             self.state = self._load_real_world()
+        elif getattr(self.settings, "world", "sample") == "multidepot":
+            self.state = build_multidepot_state(urban_speed_kmh=self.settings.urban_speed_kmh)
+            self.geometry = self._generate_synthetic_geometry(self.state)
         else:
             self.state = build_sample_state(urban_speed_kmh=self.settings.urban_speed_kmh)
             self.geometry = self._generate_synthetic_geometry(self.state)
@@ -59,9 +62,15 @@ class SimulationController:
     def _generate_synthetic_geometry(self, state):
         import math, random
         geom = {}
+        # Draw EVERY edge in the graph as a road — including the full depot↔customer
+        # and customer↔customer mesh — so all connections are visible on the map.
+        # The winding amplitude is capped (see _AMP_CAP below) so long cross-map edges
+        # stay nearly straight instead of exploding into huge squiggles; short local
+        # roads still curve enough to look real.
+        _AMP_CAP = 0.006   # ~0.66 km max lateral wiggle, regardless of edge length
         for edge in state.road_graph.edges.values():
             if edge.id in geom: continue
-            
+
             n1 = state.road_graph.nodes[edge.from_node]
             n2 = state.road_graph.nodes[edge.to_node]
             lat1, lng1 = n1.location.lat, n1.location.lng
@@ -77,10 +86,11 @@ class SimulationController:
                 
                 # Create 5-7 intermediate points to make it zigzagged and winding like real roads
                 num_pts = rng.randint(5, 7)
+                amp = min(0.8 * dist, _AMP_CAP)   # cap wiggle so long edges stay ~straight
                 for i in range(1, num_pts):
                     progress = i / num_pts
-                    # Vibrate around the straight line, amplitude proportional to dist
-                    offset = (rng.random() - 0.5) * 0.8 * dist
+                    # Vibrate around the straight line, amplitude capped (see _AMP_CAP)
+                    offset = (rng.random() - 0.5) * amp
                     # Taper off the offset near the ends
                     taper = math.sin(progress * math.pi)
                     
@@ -95,23 +105,38 @@ class SimulationController:
             rev_id = f"{edge.to_node}->{edge.from_node}"
             geom[rev_id] = list(reversed(pts))
 
-        # --- W001 detour: make it read cleanly on the map ----------------------
-        # The synthetic offsets above would draw DEPOT->W001 as its own squiggle,
-        # making it look like a second depot->C001 road. Instead overlay DEPOT->W001
-        # on the first ~80% of the real DEPOT->C001 road, and turn W001->C001 into a
-        # visible arc that branches OFF near the jam — the actual "đường vòng".
+        # --- Detour waypoints: make each W-point read cleanly on the map -------
+        # The synthetic offsets above would draw <depot>->W as its own squiggle,
+        # making it look like a second road. Instead overlay <depot>->W on the first
+        # ~80% of the real <depot>->C road, and turn W->C into a visible arc that
+        # branches OFF — the actual "đường vòng". Works for the sample world (W001 on
+        # DEPOT->C001) and the multi-depot world (one W per cluster) alike.
         rg_nodes = state.road_graph.nodes
-        if "W001" in rg_nodes and "DEPOT->C001" in geom:
-            main = geom["DEPOT->C001"]
+        depot_ids = set(state.all_depots())
+        for wid, wnode in list(rg_nodes.items()):
+            if not wid.startswith("W") or wid in state.customers:
+                continue
+            # Identify the depot the waypoint hangs off and the customer it detours to.
+            depot_nb = cust_nb = None
+            for eid in state.road_graph.adjacency.get(wid, []):
+                to = state.road_graph.edges[eid].to_node
+                if to in depot_ids:
+                    depot_nb = to
+                elif to in state.customers:
+                    cust_nb = to
+            main_id = f"{depot_nb}->{cust_nb}"
+            if not depot_nb or not cust_nb or main_id not in geom:
+                continue
+            main = geom[main_id]
             cut = max(2, int(round(len(main) * 0.8)))
             depot_to_w = main[:cut]
-            geom["DEPOT->W001"] = depot_to_w
-            geom["W001->DEPOT"] = list(reversed(depot_to_w))
+            geom[f"{depot_nb}->{wid}"] = depot_to_w
+            geom[f"{wid}->{depot_nb}"] = list(reversed(depot_to_w))
 
-            # Anchor the arc at the actual road endpoint (= the W001 marker), not the
+            # Anchor the arc at the actual road endpoint (= the W marker), not the
             # straight node location, so the detour visibly connects to the road.
             w_lat, w_lng = depot_to_w[-1]
-            cl = rg_nodes["C001"].location
+            cl = rg_nodes[cust_nb].location
             dlat, dlng = cl.lat - w_lat, cl.lng - w_lng
             length = math.hypot(dlat, dlng) or 1e-9
             plat, plng = -dlng / length, dlat / length        # unit perpendicular
@@ -122,8 +147,8 @@ class SimulationController:
                 bulge = math.sin(tt * math.pi) * length * 0.6  # taper to 0 at ends
                 arc.append((w_lat + dlat * tt + plat * bulge,
                             w_lng + dlng * tt + plng * bulge))
-            geom["W001->C001"] = arc
-            geom["C001->W001"] = list(reversed(arc))
+            geom[f"{wid}->{cust_nb}"] = arc
+            geom[f"{cust_nb}->{wid}"] = list(reversed(arc))
 
         return geom
 
@@ -153,17 +178,21 @@ class SimulationController:
     def _route_nodes(self, vehicle_id: str) -> List[str]:
         """The vehicle's planned node sequence (DEPOT -> stops -> DEPOT) so the
         control-room map can draw its route. Empty plan -> just the depot."""
+        v = self.state.get_vehicle(vehicle_id)
+        home = (v.home_depot if v and v.home_depot in self.state.all_depots()
+                else self.state.depot.id)
         vr = self.state.plan.get(vehicle_id)
         if not vr or not vr.stops:
-            return ["DEPOT"]
+            return [home]
         stops = sorted(vr.stops, key=lambda st: st.sequence)
-        return ["DEPOT"] + [st.customer_id for st in stops] + ["DEPOT"]
+        return [home] + [st.customer_id for st in stops] + [home]
 
     def _vehicle_view(self, v) -> Dict:
         route_nodes = self._route_nodes(v.id)
         # next node on the route after the current stop index (clamped)
         nxt = min(max(v.current_stop_index, 0) + 1, len(route_nodes) - 1)
         lat, lng = self._vehicle_position(v)
+        home = (v.home_depot if v and v.home_depot in self.state.all_depots() else self.state.depot.id)
         return {
             "id": v.id, "status": v.status.value,
             "lat": lat, "lng": lng,
@@ -173,7 +202,7 @@ class SimulationController:
             "route_nodes": route_nodes,
             "route_path": self._route_path(v),       # [[lng,lat]...] along real roads
             "return_path": self._return_path(v),     # [[lng,lat]...] dashed return-to-depot leg
-            "leg_to": route_nodes[nxt] if route_nodes else "DEPOT",
+            "leg_to": route_nodes[nxt] if route_nodes else home,
         }
 
     def _load_pct(self, v) -> int:
@@ -344,14 +373,16 @@ class SimulationController:
         nxt = next((s for s in stops if s.actual_arrival is None), None)
         visited = [s for s in stops if s.actual_arrival is not None]
 
+        home = (v.home_depot if v and v.home_depot in self.state.all_depots() else self.state.depot.id)
         if nxt is None:
             # Route done (all stops visited). Is it back at depot?
-            if v.pos == self.state.depot.location:
+            home_loc = self.state.all_depots().get(home, self.state.depot).location
+            if v.pos == home_loc:
                 return default
             # It is currently driving back to the depot
-            from_node = visited[-1].customer_id if visited else "DEPOT"
-            to_node = "DEPOT"
-            from_time = visited[-1].actual_departure if visited else self.state.depot.opening_time
+            from_node = visited[-1].customer_id if visited else home
+            to_node = home
+            from_time = visited[-1].actual_departure if visited else self.state.all_depots().get(home, self.state.depot).opening_time
             if from_time is None:
                 # Still doing service at the last customer
                 return default
@@ -365,7 +396,7 @@ class SimulationController:
             return pt or default
 
         # Otherwise, en route to `nxt`
-        from_node = visited[-1].customer_id if visited else "DEPOT"
+        from_node = visited[-1].customer_id if visited else home
         to_node = nxt.customer_id
         wade = float(v.wade_capability)
         # Use effective leg time for span: when a traffic jam raises effective_time
@@ -403,6 +434,15 @@ class SimulationController:
                         path.append(ll)
             out[vid] = path
         return out
+
+    def _waypoint_marker(self, nid: str, n) -> Dict:
+        """lat/lng for a detour waypoint marker: sit it on the drawn road that ends
+        at the waypoint (any depot->nid leg) so it lands on the visible road, not the
+        straight node location; fall back to the node's own coordinates."""
+        for eid, poly in self.geometry.items():
+            if eid.endswith(f"->{nid}") and poly:
+                return {"lat": poly[-1][0], "lng": poly[-1][1], "name": n.location.name}
+        return {"lat": n.location.lat, "lng": n.location.lng, "name": n.location.name}
 
     # ----- view model -----
     def snapshot(self) -> Dict:
@@ -466,16 +506,19 @@ class SimulationController:
             ],
             "depot": {"lat": s.depot.location.lat, "lng": s.depot.location.lng,
                       "name": s.depot.location.name},
+            # All depots (multi-depot worlds have >1; single-depot worlds emit one).
+            "depots": [
+                {"id": dep.id, "lat": dep.location.lat, "lng": dep.location.lng,
+                 "name": dep.location.name}
+                for dep in s.all_depots().values()
+            ],
             # Road waypoints (detour junctions like W001) — drawn as their own
             # markers so the detour point is visible, sitting on the road it splits.
             "waypoints": [
-                {"id": nid,
-                 # sit the marker on the drawn DEPOT->nid road when geometry exists
-                 "lat": (self.geometry.get(f"DEPOT->{nid}") or [(n.location.lat, n.location.lng)])[-1][0],
-                 "lng": (self.geometry.get(f"DEPOT->{nid}") or [(n.location.lat, n.location.lng)])[-1][1],
-                 "name": n.location.name}
+                {"id": nid, **self._waypoint_marker(nid, n)}
                 for nid, n in s.road_graph.nodes.items()
-                if nid not in s.customers and nid != "DEPOT" and nid.startswith("W")
+                if nid not in s.customers and nid not in s.all_depots()
+                and nid.startswith("W")
             ],
             "customers": [
                 {"id": c.id, "lat": c.location.lat, "lng": c.location.lng,
@@ -571,8 +614,9 @@ class SimulationController:
                     visited = sorted(
                         [s for s in new_vr.stops if s.actual_arrival is not None],
                         key=lambda s: s.sequence)
-                    from_node = visited[-1].customer_id if visited else "DEPOT"
                     v = self.state.get_vehicle(vid)
+                    home = v.home_depot if v and v.home_depot in self.state.all_depots() else self.state.depot.id
+                    from_node = visited[-1].customer_id if visited else home
                     wade = float(v.wade_capability) if v else 0.3
                     dist = shortest_times_from(self.state.road_graph, from_node, wade)
                     leg_min = dist.get(unvisited[0].customer_id, 1.0)
@@ -601,18 +645,17 @@ class SimulationController:
                                     new_to = unvisited[0].customer_id
                                     if old_to == new_to:
                                         same_first_leg = True
-                                    else:
                                         eff = max(1.0, shortest_times_from(
-                                            self.state.road_graph, "DEPOT", wade).get(old_to, 1.0))
+                                            self.state.road_graph, home, wade).get(old_to, 1.0))
                                         frac = max(0.0, min(1.0, (
                                             self.state.clock - old_vr.start_time
                                         ).total_seconds() / (eff * 60.0)))
                                         if frac > 0.005:
                                             ret_eff = max(0.5, shortest_times_from(
-                                                self.state.road_graph, old_to, wade).get("DEPOT", 1.0))
+                                                self.state.road_graph, old_to, wade).get(home, 1.0))
                                             ret_min = frac * ret_eff
                                             self._return_context[vid] = {
-                                                'from_node': "DEPOT", 'to_node': old_to,
+                                                'from_node': home, 'to_node': old_to,
                                                 'frac_at_approval': frac,
                                                 'approval_clock': self.state.clock,
                                                 'return_duration_min': ret_min,

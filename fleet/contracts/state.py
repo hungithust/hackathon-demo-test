@@ -159,6 +159,7 @@ class Vehicle:
     fuel_level: float = 100.0
     veh_type: str = "truck"        # groups vehicles by wade_capability (spec §6.5)
     wade_capability: float = 0.3   # max flood depth (m) this vehicle can wade
+    home_depot: str = "DEPOT"      # id of the depot this vehicle departs from and returns to
 
 
 @dataclass
@@ -168,6 +169,7 @@ class Depot:
     opening_time: datetime
     closing_time: datetime
     vehicles: List[Vehicle] = field(default_factory=list)
+    id: str = "DEPOT"              # node id in the road graph; unique per depot
 
 
 @dataclass
@@ -262,9 +264,10 @@ class WorldState:
     """Single in-memory source of truth. Snapshot to JSON via to_dict/from_dict."""
 
     clock: datetime
-    depot: Depot
+    depot: Depot                   # primary depot (back-compat; shared inventory/hours)
     customers: Dict[str, CustomerProfile] = field(default_factory=dict)
     vehicles: Dict[str, Vehicle] = field(default_factory=dict)
+    depots: Dict[str, Depot] = field(default_factory=dict)  # all depots (multi-depot worlds)
     road_graph: RoadGraph = field(
         default_factory=lambda: RoadGraph(nodes={}, edges={}, adjacency={}))
     plan: Dict[str, VehicleRoute] = field(default_factory=dict)
@@ -275,6 +278,22 @@ class WorldState:
     sim_tick: int = 0
 
     # ----- helpers -----
+    def all_depots(self) -> Dict[str, "Depot"]:
+        """Every depot keyed by id. Single-depot worlds (depots empty) fall back to
+        the primary `depot`, so callers can always iterate uniformly."""
+        return self.depots if self.depots else {self.depot.id: self.depot}
+
+    def depot_of(self, vehicle_or_id) -> "Depot":
+        """The home depot for a vehicle (or vehicle id / home_depot id). Falls back
+        to the primary `depot` when the id is unknown (e.g. single-depot world)."""
+        if isinstance(vehicle_or_id, Vehicle):
+            home = vehicle_or_id.home_depot
+        elif isinstance(vehicle_or_id, str) and vehicle_or_id in self.vehicles:
+            home = self.vehicles[vehicle_or_id].home_depot
+        else:
+            home = vehicle_or_id
+        return self.all_depots().get(home, self.depot)
+
     def get_customer(self, customer_id: str) -> Optional[CustomerProfile]:
         return self.customers.get(customer_id)
 

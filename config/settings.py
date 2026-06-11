@@ -61,7 +61,7 @@ class Settings:
     riva_endpoint: str = ""           # intake: Riva ASR NIM endpoint
     whisper_model: str = "large-v3"   # intake: faster-whisper model id
     intake_extractor: str = "nim"     # intake: nim | claude (extractor transport)
-    world: str = "sample"                        # real-map: sample | real
+    world: str = "sample"                        # world builder: sample | multidepot | real
     osm_graphml_path: str = "data/hcm_drive.graphml"  # real-map: cached OSM graph
     urban_speed_kmh: float = 25.0                # real-map: conservative travel-time speed
 

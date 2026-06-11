@@ -47,6 +47,11 @@ class CpuSolver:
                 feasible=True, metrics={"total_time_min": 0.0})
 
         depot = problem.locations.index(problem.depot_id)
+        # All depot nodes = locations that are not a task. In multi-depot problems
+        # each vehicle returns to its own end_location; every depot node is a non-stop.
+        task_locs = {t.customer_id for t in problem.tasks}
+        depot_idxs = {i for i, loc in enumerate(problem.locations)
+                      if loc not in task_locs}
 
         # ---- everything in integer minutes from the earliest moment ----
         base = min([f.shift_start for f in problem.fleet]
@@ -70,7 +75,8 @@ class CpuSolver:
                       + [mins(t.tw_end) for t in problem.tasks]) + 1
 
         starts = [problem.locations.index(f.start_location or problem.depot_id) for f in problem.fleet]
-        ends = [depot] * num_vehicles
+        ends = [problem.locations.index(f.end_location or f.start_location or problem.depot_id)
+                for f in problem.fleet]
         manager = pywrapcp.RoutingIndexManager(n, num_vehicles, starts, ends)
         routing = pywrapcp.RoutingModel(manager)
 
@@ -133,7 +139,7 @@ class CpuSolver:
                 feasible=False, metrics={"total_time_min": 0.0})
 
         return self._read(problem, manager, routing, solution, time_dim,
-                          demand, service, base, depot)
+                          demand, service, base, depot_idxs)
 
     def _search_parameters(self):
         """Build OR-Tools search params from settings. Default (no metaheuristic,
@@ -173,7 +179,7 @@ class CpuSolver:
 
     @staticmethod
     def _read(problem, manager, routing, solution, time_dim,
-              demand, service, base, depot) -> RoutingSolution:
+              demand, service, base, depot_idxs) -> RoutingSolution:
         routes: Dict[str, List[SolvedStop]] = {}
         total_time = 0
         for vehicle_id, f in enumerate(problem.fleet):
@@ -188,7 +194,7 @@ class CpuSolver:
                 if ix == routing.Start(vehicle_id):
                     continue
                 node = manager.IndexToNode(ix)
-                if node == depot:
+                if node in depot_idxs:
                     continue
                 arrival = base + timedelta(
                     minutes=solution.Value(time_dim.CumulVar(ix)))
@@ -205,7 +211,7 @@ class CpuSolver:
 
         dropped = []
         for i in range(len(problem.locations)):
-            if i == depot:
+            if i in depot_idxs:
                 continue
             index = manager.NodeToIndex(i)
             if solution.Value(routing.NextVar(index)) == index:

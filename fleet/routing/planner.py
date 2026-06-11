@@ -35,9 +35,10 @@ def _build_plan(state: WorldState, optimizer: RouteOptimizer,
         ]
         vehicle = state.get_vehicle(vid)
         wade = float(vehicle.wade_capability) if vehicle else 0.3
-        
-        first_leg_min = shortest_times_from(state.road_graph, depot_id, wade).get(stops[0].customer_id, 0.0)
-        last_leg_min = shortest_times_from(state.road_graph, stops[-1].customer_id, wade).get(depot_id, 0.0)
+        home = vehicle.home_depot if (vehicle and vehicle.home_depot in state.all_depots()) else depot_id
+
+        first_leg_min = shortest_times_from(state.road_graph, home, wade).get(stops[0].customer_id, 0.0)
+        last_leg_min = shortest_times_from(state.road_graph, stops[-1].customer_id, wade).get(home, 0.0)
         
         start_time = stops[0].planned_arrival - __import__("datetime").timedelta(minutes=first_leg_min)
         
@@ -98,7 +99,8 @@ def preview_reroute(state: WorldState, optimizer: RouteOptimizer,
                 nxt = copy.deepcopy(old_route.stops[0])
                 v = state.get_vehicle(vid)
                 wade = float(v.wade_capability) if v else 0.3
-                dist = shortest_times_from(state.road_graph, depot_id, wade)
+                home = v.home_depot if v and v.home_depot in state.all_depots() else depot_id
+                dist = shortest_times_from(state.road_graph, home, wade)
                 leg_min = dist.get(nxt.customer_id, 0.0)
                 nxt.planned_arrival = old_route.start_time + timedelta(minutes=leg_min)
                 svc = float(getattr(state.customers.get(nxt.customer_id), "service_time_min", 10.0))
@@ -120,9 +122,10 @@ def preview_reroute(state: WorldState, optimizer: RouteOptimizer,
             visited_stops = [s for s in old_route.stops if s.actual_arrival is not None]
             v = state.get_vehicle(vid)
             wade = float(v.wade_capability) if v else 0.3
-            
+            home = v.home_depot if v and v.home_depot in state.all_depots() else depot_id
+
             if visited_stops:
-                leg_min = shortest_times_from(state.road_graph, visited_stops[-1].customer_id, wade).get(depot_id, 0.0)
+                leg_min = shortest_times_from(state.road_graph, visited_stops[-1].customer_id, wade).get(home, 0.0)
                 new_plan[vid] = VehicleRoute(
                     vehicle_id=vid,
                     stops=visited_stops,
@@ -132,7 +135,7 @@ def preview_reroute(state: WorldState, optimizer: RouteOptimizer,
                 )
             elif state.clock > old_route.start_time and old_route.stops:
                 first_stop = old_route.stops[0]
-                leg_min = shortest_times_from(state.road_graph, first_stop.customer_id, wade).get(depot_id, 0.0)
+                leg_min = shortest_times_from(state.road_graph, first_stop.customer_id, wade).get(home, 0.0)
                 new_plan[vid] = VehicleRoute(
                     vehicle_id=vid,
                     stops=[first_stop],
@@ -234,6 +237,9 @@ def graph_reroute_vehicle(
     if not vehicle or not vr:
         return None
 
+    # The vehicle plans against its own home depot (multi-depot: returns to its kho).
+    home = vehicle.home_depot if vehicle.home_depot in state.all_depots() else depot_id
+
     visited = sorted([s for s in vr.stops if s.actual_arrival is not None],
                      key=lambda s: s.sequence)
     unvisited = sorted([s for s in vr.stops if s.actual_arrival is None],
@@ -242,11 +248,11 @@ def graph_reroute_vehicle(
         return None
 
     # Req 5: vehicle already committed — do not reroute
-    if _vehicle_in_jam(state, vehicle_id, depot_id):
+    if _vehicle_in_jam(state, vehicle_id, home):
         return None
 
     wade = float(vehicle.wade_capability)
-    pos = _vehicle_current_leg(state, vehicle_id, depot_id)
+    pos = _vehicle_current_leg(state, vehicle_id, home)
 
     free_stops: List[Stop] = list(unvisited)
     locked_stop: Optional[Stop] = None
@@ -267,8 +273,8 @@ def graph_reroute_vehicle(
                           or visited[-1].actual_arrival
                           + datetime.timedelta(minutes=10.0))
         else:
-            start_node = depot_id
-            start_time = vehicle.shift_start or state.depot.opening_time
+            start_node = home
+            start_time = vehicle.shift_start or state.depot_of(vehicle).opening_time
         current_time = max(start_time, state.clock)
         curr_dists = avoidance_times_from(state.road_graph, start_node, wade)
 
@@ -316,7 +322,7 @@ def graph_reroute_vehicle(
     if not new_stops:
         return None
 
-    last_leg = timing_dists.get(depot_id, 0.0)
+    last_leg = timing_dists.get(home, 0.0)
     return VehicleRoute(
         vehicle_id=vehicle_id,
         stops=visited + new_stops,
@@ -358,38 +364,40 @@ def build_reroute_problem_for_vehicle(
         return None
 
     wade = float(vehicle.wade_capability)
+    home = vehicle.home_depot if vehicle.home_depot in state.all_depots() else depot_id
+    v_depot = state.depot_of(vehicle)
 
     # Where does the vehicle plan from?  If it is physically mid-edge we model its
     # on-road position as a *virtual* start node so travel costs are proportional
     # to the distance remaining (req 1) — exactly the criterion the greedy reroute
     # uses, but expressed as a matrix row the VRP solver can consume.  Otherwise it
     # plans from its last served stop, or DEPOT when it has not departed yet.
-    pos = _vehicle_current_leg(state, vehicle_id, depot_id)
+    pos = _vehicle_current_leg(state, vehicle_id, home)
     virtual_ctx = None
     if pos is not None:
         from_node, to_node, elapsed_min = pos
         current_loc = f"{vehicle_id}__pos"
         virtual_ctx = (from_node, to_node, elapsed_min)
-        avail_time = max(vehicle.shift_start or state.depot.opening_time, state.clock)
+        avail_time = max(vehicle.shift_start or v_depot.opening_time, state.clock)
     else:
         if visited:
             current_loc = visited[-1].customer_id
             avail_time = visited[-1].actual_departure or (
                 visited[-1].actual_arrival + datetime.timedelta(minutes=10.0))
         else:
-            current_loc = depot_id
-            avail_time = vehicle.shift_start or state.depot.opening_time
+            current_loc = home
+            avail_time = vehicle.shift_start or v_depot.opening_time
         avail_time = max(avail_time, state.clock)
 
-    # Locations list: [current_loc] + unvisited customers + DEPOT (return point).
+    # Locations list: [current_loc] + unvisited customers + home depot (return point).
     # When driving, current_loc is the virtual node; the solver is free to continue
     # to the locked destination or turn back — both are reachable from it.
     locs: List[str] = [current_loc]
     for s in unvisited:
         if s.customer_id not in locs:
             locs.append(s.customer_id)
-    if depot_id not in locs:
-        locs.append(depot_id)
+    if home not in locs:
+        locs.append(home)
 
     # Single high-avoidance matrix: 100x extra cost on congested edges forces
     # the solver to route around traffic jams/flooded areas rather than through them.
@@ -414,7 +422,7 @@ def build_reroute_problem_for_vehicle(
     # drops an assigned stop for lateness (it would otherwise penalty-drop any visit
     # whose arrival — inflated by the 100× congestion matrix — exceeds tw_end).
     # tw_start is still clamped to avail_time so arrivals never land in the past.
-    horizon_end = vehicle.shift_end or state.depot.closing_time
+    horizon_end = vehicle.shift_end or v_depot.closing_time
     tasks = []
     total_demand = 0.0
     for s in unvisited:
@@ -441,14 +449,15 @@ def build_reroute_problem_for_vehicle(
             capacity_kg=max(vehicle.capacity_kg, total_demand + 1.0),
             veh_type=f"{vehicle.veh_type}_reroute",
             shift_start=avail_time,
-            shift_end=vehicle.shift_end or state.depot.closing_time,
+            shift_end=vehicle.shift_end or v_depot.closing_time,
             start_location=current_loc,
+            end_location=home,
         )
     ]
 
     return RoutingProblem(
         locations=locs,
-        depot_id=depot_id,
+        depot_id=home,
         time_matrix=time_matrix,
         fleet=fleet,
         tasks=tasks,
@@ -535,8 +544,10 @@ def solver_reroute_vehicle(
 
     vehicle = state.get_vehicle(vehicle_id)
     wade = float(vehicle.wade_capability) if vehicle else 0.3
+    home = (vehicle.home_depot if vehicle and vehicle.home_depot in state.all_depots()
+            else depot_id)
     last_leg = avoidance_times_from(
-        state.road_graph, new_stops[-1].customer_id, wade).get(depot_id, 0.0)
+        state.road_graph, new_stops[-1].customer_id, wade).get(home, 0.0)
 
     return VehicleRoute(
         vehicle_id=vehicle_id,

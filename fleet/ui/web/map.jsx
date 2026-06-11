@@ -78,7 +78,11 @@ function DispatchMap({ state, speed = 2, selectedVeh, onSelectVeh, selectedEvent
 
   // fixed nodes (depot + customers) plus real road geometry define the projection
   // bounds, so the layout stays stable while vehicles move and roads aren't clipped.
-  const nodes = { DEPOT: { lat: state.depot.lat, lng: state.depot.lng, name: state.depot.name } };
+  const depots = (state.depots && state.depots.length)
+    ? state.depots
+    : [{ id: "DEPOT", lat: state.depot.lat, lng: state.depot.lng, name: state.depot.name }];
+  const nodes = {};
+  depots.forEach((d) => { nodes[d.id] = { lat: d.lat, lng: d.lng, name: d.name }; });
   state.customers.forEach((c) => { nodes[c.id] = c; });
   const lats = Object.values(nodes).map((n) => n.lat);
   const lngs = Object.values(nodes).map((n) => n.lng);
@@ -345,7 +349,7 @@ function DispatchMap({ state, speed = 2, selectedVeh, onSelectVeh, selectedEvent
           return (
             <g key={w.id} transform={`translate(${p.x},${p.y})`}
                onMouseEnter={() => setTip({ id: w.id + " · " + (w.name || "Detour point"), color: "#A855F7",
-                 rows: [["Role", "Detour waypoint"], ["On corridor", "DEPOT → C001"]] })}
+                 rows: [["Role", "Detour waypoint"], ["Note", "đường vòng né jam/ngập"]] })}
                onMouseLeave={() => setTip(null)} style={{ cursor: "pointer" }}>
               <circle r="10" fill="#A855F7" opacity=".18"/>
               <rect x="-5.5" y="-5.5" width="11" height="11" rx="2" transform="rotate(45)" fill="#A855F7" stroke="#ffffff" strokeWidth="1.5"/>
@@ -354,15 +358,17 @@ function DispatchMap({ state, speed = 2, selectedVeh, onSelectVeh, selectedEvent
           );
         })}
 
-        {/* depot */}
-        <g transform={`translate(${PNODES.DEPOT.x},${PNODES.DEPOT.y})`}
-           onMouseEnter={() => setTip({ id: "DEPOT · " + state.depot.name, color: "#F5C451",
-             rows: [["Role", "Central warehouse"], ["Open orders", state.pending_orders]] })}
-           onMouseLeave={() => setTip(null)} style={{ cursor: "pointer" }}>
-          <circle r="34" fill="url(#depotGlow)"/>
-          <rect x="-10" y="-10" width="20" height="20" rx="4" transform="rotate(45)" fill="#F5C451" stroke="#ffffff" strokeWidth="1.6"/>
-          <text className="node-label" x="0" y="-18" textAnchor="middle" fill="#d97706" style={{ fontWeight: 600, fontSize: 11 }}>DEPOT</text>
-        </g>
+        {/* depots */}
+        {depots.map((d) => PNODES[d.id] && (
+          <g key={d.id} transform={`translate(${PNODES[d.id].x},${PNODES[d.id].y})`}
+             onMouseEnter={() => setTip({ id: d.id + " · " + d.name, color: "#F5C451",
+               rows: [["Role", "Warehouse"], ["Open orders", state.pending_orders]] })}
+             onMouseLeave={() => setTip(null)} style={{ cursor: "pointer" }}>
+            <circle r="34" fill="url(#depotGlow)"/>
+            <rect x="-10" y="-10" width="20" height="20" rx="4" transform="rotate(45)" fill="#F5C451" stroke="#ffffff" strokeWidth="1.6"/>
+            <text className="node-label" x="0" y="-18" textAnchor="middle" fill="#d97706" style={{ fontWeight: 600, fontSize: 11 }}>{d.id}</text>
+          </g>
+        ))}
 
         {/* vehicles */}
         {state.vehicles.map((v) => {

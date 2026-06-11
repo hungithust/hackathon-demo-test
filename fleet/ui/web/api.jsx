@@ -19,6 +19,7 @@ function normalize(snap) {
     sim_tick: snap.sim_tick,
     pending_orders: snap.pending_orders,
     depot: snap.depot,
+    depots: snap.depots || (snap.depot ? [{ id: "DEPOT", ...snap.depot }] : []),
     customers: snap.customers || [],
     vehicles: snap.vehicles || [],
     events: snap.active_events || [],
@@ -33,6 +34,7 @@ function emptyState() {
   return {
     clock: new Date().toISOString().slice(0, 19), sim_tick: 0, pending_orders: 0,
     depot: { lat: 10.8231, lng: 106.6297, name: "Depot" },
+    depots: [{ id: "DEPOT", lat: 10.8231, lng: 106.6297, name: "Depot" }],
     customers: [], vehicles: [], events: [], decisions: [], resolved: [], autoHandled: [], routes: [],
   };
 }
