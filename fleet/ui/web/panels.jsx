@@ -246,6 +246,7 @@ function VoicePanel({ onReport, onReportAudio, clock }) {
   const [phase, setPhase] = React.useState("idle"); // idle | rec | processing
   const [result, setResult] = React.useState(null);
   const [error, setError] = React.useState(null);
+  const [collapsed, setCollapsed] = React.useState(false);
   const recRef = React.useRef(null);   // MediaRecorder
   const chunksRef = React.useRef([]);
 
@@ -298,7 +299,14 @@ function VoicePanel({ onReport, onReportAudio, clock }) {
         <Icon name="mic" size={15} style={{ color: "var(--accent)" }}/>
         <h2>Field Report</h2>
         <span className="count">voice · text</span>
+        <button className="btn ghost icon" style={{ marginLeft: "auto" }}
+          onClick={() => setCollapsed((c) => !c)}
+          title={collapsed ? "Mở rộng Field Report" : "Thu nhỏ Field Report"}>
+          <Icon name="chevron" size={15}
+            style={{ transform: collapsed ? "rotate(90deg)" : "rotate(-90deg)", transition: ".15s" }}/>
+        </button>
       </div>
+      {!collapsed && (
       <div className="voice">
         <div className="voice-tools">
           <button className={"mic-btn" + (phase === "rec" ? " rec" : "")} onClick={toggleMic} title={phase === "rec" ? "Click to stop & transcribe" : "Click to record (RIVA ASR)"}>
@@ -367,6 +375,7 @@ function VoicePanel({ onReport, onReportAudio, clock }) {
           </div>
         )}
       </div>
+      )}
     </div>
   );
 }

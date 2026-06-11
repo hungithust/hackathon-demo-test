@@ -63,7 +63,11 @@ _EXAMPLES = (
     '{"reports":['
     '{"event_type":"urgent_order","target_hint":"C003","severity":"high"},'
     '{"event_type":"flooded_area","target_hint":"C001","severity":"high",'
-    '"edge_status":"flooded","flood_level":0.6}]}\n'
+    '"edge_status":"flooded","flood_level":0.6}]}\n\n'
+    'Example 3\n'
+    'Report: "heavy traffic jam near C003"\n'
+    '{"reports":[{"event_type":"traffic","target_hint":"C003","severity":"high",'
+    '"edge_status":"congested","traffic_factor":10.0}]}\n'
 )
 
 
