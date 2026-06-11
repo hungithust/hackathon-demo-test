@@ -90,11 +90,41 @@ class SimulationController:
                 
             pts.append((lat2, lng2))
             geom[edge.id] = pts
-            
+
             # Reverse edge
             rev_id = f"{edge.to_node}->{edge.from_node}"
             geom[rev_id] = list(reversed(pts))
-            
+
+        # --- W001 detour: make it read cleanly on the map ----------------------
+        # The synthetic offsets above would draw DEPOT->W001 as its own squiggle,
+        # making it look like a second depot->C001 road. Instead overlay DEPOT->W001
+        # on the first ~80% of the real DEPOT->C001 road, and turn W001->C001 into a
+        # visible arc that branches OFF near the jam — the actual "đường vòng".
+        rg_nodes = state.road_graph.nodes
+        if "W001" in rg_nodes and "DEPOT->C001" in geom:
+            main = geom["DEPOT->C001"]
+            cut = max(2, int(round(len(main) * 0.8)))
+            depot_to_w = main[:cut]
+            geom["DEPOT->W001"] = depot_to_w
+            geom["W001->DEPOT"] = list(reversed(depot_to_w))
+
+            # Anchor the arc at the actual road endpoint (= the W001 marker), not the
+            # straight node location, so the detour visibly connects to the road.
+            w_lat, w_lng = depot_to_w[-1]
+            cl = rg_nodes["C001"].location
+            dlat, dlng = cl.lat - w_lat, cl.lng - w_lng
+            length = math.hypot(dlat, dlng) or 1e-9
+            plat, plng = -dlng / length, dlat / length        # unit perpendicular
+            arc = []
+            steps = 8
+            for k in range(steps + 1):
+                tt = k / steps
+                bulge = math.sin(tt * math.pi) * length * 0.6  # taper to 0 at ends
+                arc.append((w_lat + dlat * tt + plat * bulge,
+                            w_lng + dlng * tt + plng * bulge))
+            geom["W001->C001"] = arc
+            geom["C001->W001"] = list(reversed(arc))
+
         return geom
 
     def _load_real_world(self):
@@ -365,7 +395,12 @@ class SimulationController:
                 {"id": e.id, "event_type": e.event_type.value,
                  "target": e.target, "severity": e.severity.value,
                  "started_at": e.started_at.isoformat(),
-                 "description": e.description}
+                 "description": e.description,
+                 # congested sub-segment fractions, so the map draws the red overlay
+                 # at the real jam location along the road (not the edge midpoint).
+                 **({"cong_start": ed.congestion_start_frac,
+                     "cong_end": ed.congestion_end_frac}
+                    if (ed := s.road_graph.get_edge(e.target)) is not None else {})}
                 for e in s.get_active_events()
             ],
             "decisions": {
@@ -405,6 +440,17 @@ class SimulationController:
             ],
             "depot": {"lat": s.depot.location.lat, "lng": s.depot.location.lng,
                       "name": s.depot.location.name},
+            # Road waypoints (detour junctions like W001) — drawn as their own
+            # markers so the detour point is visible, sitting on the road it splits.
+            "waypoints": [
+                {"id": nid,
+                 # sit the marker on the drawn DEPOT->nid road when geometry exists
+                 "lat": (self.geometry.get(f"DEPOT->{nid}") or [(n.location.lat, n.location.lng)])[-1][0],
+                 "lng": (self.geometry.get(f"DEPOT->{nid}") or [(n.location.lat, n.location.lng)])[-1][1],
+                 "name": n.location.name}
+                for nid, n in s.road_graph.nodes.items()
+                if nid not in s.customers and nid != "DEPOT" and nid.startswith("W")
+            ],
             "customers": [
                 {"id": c.id, "lat": c.location.lat, "lng": c.location.lng,
                  "name": c.location.name, "priority": c.priority,
@@ -514,6 +560,7 @@ class SimulationController:
 
                     if not is_driving:
                         ret_min = 0.0
+                        same_first_leg = False
                         if not visited and new_vr.start_time and new_vr.start_time < self.state.clock:
                             # Vehicle left DEPOT but hasn't visited any customer yet.
                             # Calculate how far along the original DEPOT->first_stop it is
@@ -525,23 +572,31 @@ class SimulationController:
                                     key=lambda s: s.sequence)
                                 if old_unv:
                                     old_to = old_unv[0].customer_id
-                                    eff = max(1.0, shortest_times_from(
-                                        self.state.road_graph, "DEPOT", wade).get(old_to, 1.0))
-                                    frac = max(0.0, min(1.0, (
-                                        self.state.clock - old_vr.start_time
-                                    ).total_seconds() / (eff * 60.0)))
-                                    if frac > 0.005:
-                                        ret_eff = max(0.5, shortest_times_from(
-                                            self.state.road_graph, old_to, wade).get("DEPOT", 1.0))
-                                        ret_min = frac * ret_eff
-                                        self._return_context[vid] = {
-                                            'from_node': "DEPOT", 'to_node': old_to,
-                                            'frac_at_approval': frac,
-                                            'approval_clock': self.state.clock,
-                                            'return_duration_min': ret_min,
-                                        }
-                        new_vr.start_time = self.state.clock + timedelta(minutes=ret_min)
-                        target_arrival = self.state.clock + timedelta(minutes=ret_min + leg_min)
+                                    new_to = unvisited[0].customer_id
+                                    if old_to == new_to:
+                                        same_first_leg = True
+                                    else:
+                                        eff = max(1.0, shortest_times_from(
+                                            self.state.road_graph, "DEPOT", wade).get(old_to, 1.0))
+                                        frac = max(0.0, min(1.0, (
+                                            self.state.clock - old_vr.start_time
+                                        ).total_seconds() / (eff * 60.0)))
+                                        if frac > 0.005:
+                                            ret_eff = max(0.5, shortest_times_from(
+                                                self.state.road_graph, old_to, wade).get("DEPOT", 1.0))
+                                            ret_min = frac * ret_eff
+                                            self._return_context[vid] = {
+                                                'from_node': "DEPOT", 'to_node': old_to,
+                                                'frac_at_approval': frac,
+                                                'approval_clock': self.state.clock,
+                                                'return_duration_min': ret_min,
+                                            }
+                        if same_first_leg:
+                            new_vr.start_time = old_vr.start_time
+                            target_arrival = old_vr.start_time + timedelta(minutes=leg_min)
+                        else:
+                            new_vr.start_time = self.state.clock + timedelta(minutes=ret_min)
+                            target_arrival = self.state.clock + timedelta(minutes=ret_min + leg_min)
 
                         if unvisited[0].planned_arrival is not None:
                             shift = target_arrival - unvisited[0].planned_arrival

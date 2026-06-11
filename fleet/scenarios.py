@@ -128,6 +128,37 @@ def build_sample_state(base_time: datetime = datetime(2026, 6, 4, 6, 0), urban_s
     # 6. Explicit demo road C001↔C002 (needed for the fixed traffic jam scenario)
     _bidir("C001", "C002")
 
+    # 6b. Detour waypoint on the DEPOT→C001 corridor (the fixed demo jam edge).
+    #     The demo jam covers the last 1/8 of DEPOT→C001 (frac 0.875→1.0, near
+    #     C001). W001 sits ON that line at frac 0.8 — just BEFORE the jam, between
+    #     DEPOT and the congested segment — and offers an alternate side-road
+    #     W001→C001 that bypasses the jammed tail. So a rerouted vehicle can leave
+    #     the main road at W001 ("đường vòng") and reach C001 via the detour
+    #     instead of crawling through the jam, without swinging all the way out to
+    #     a junction.  Costs:
+    #       • DEPOT↔W001 — straight, mirrors the first 80% of the direct road (clear)
+    #       • W001↔C001  — 1.3× its straight length: a genuine detour, longer than
+    #         the 20% it replaces but cheaper than both the 10× jammed tail and the
+    #         swing-out-to-junction bypass, so the reroute prefers turning off here.
+    #     Normal (no jam) planning still prefers the 1.0× direct road; the detour
+    #     only wins once DEPOT→C001 is congested.  W001 lives only in the road graph
+    #     (never in `customers`), so the VRP never treats it as a delivery stop.
+    if "C001" in nodes:
+        t = 0.8  # fraction along DEPOT→C001, just before the jam start (0.875)
+        dloc, c1loc = nodes["DEPOT"].location, nodes["C001"].location
+        w_lat = dloc.lat + (c1loc.lat - dloc.lat) * t
+        w_lng = dloc.lng + (c1loc.lng - dloc.lng) * t
+        nodes["W001"] = RoadNode("W001", Location(w_lat, w_lng, "Điểm rẽ W001", "Điểm rẽ W001"))
+        adjacency["W001"] = []
+        _bidir("DEPOT", "W001")               # clear first leg (overlays 80% of direct)
+        det_km = straight_km("W001", "C001") * 1.3   # detour side-road, longer than the straight remainder
+        det_min = det_km * 60.0 / urban_speed_kmh
+        for a, b in (("W001", "C001"), ("C001", "W001")):
+            e = RoadEdge(a, b, det_km, det_min)
+            if e.id not in edges:
+                edges[e.id] = e
+                adjacency[a].append(e.id)
+
     # 7. Synthetic junction branches — extra "ngã ba/ngã tư" bypass routes.
     #    For a corridor a→b we keep the existing direct edge AND add a parallel
     #    branch a → JX.. → b made of non-delivery junction nodes, bulged out to
