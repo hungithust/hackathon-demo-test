@@ -66,6 +66,7 @@ const Api = {
   approve:  async (id) => normalize(await jpost("/api/approve/" + encodeURIComponent(id))),
   reject:   async (id) => normalize(await jpost("/api/reject/" + encodeURIComponent(id))),
   dispatch: async (body) => normalize(await jpost("/api/dispatch", body)),
+  daylog: async () => jget("/api/daylog"),
   reset:    async () => normalize(await jpost("/api/reset")),
   report:   async (text) => {
     const res = await jpost("/api/report", { text });

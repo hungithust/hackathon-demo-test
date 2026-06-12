@@ -15,6 +15,7 @@ function App() {
   const [settingsOpen, setSettingsOpen] = React.useState(false);
   const [leftTab, setLeftTab] = React.useState("events"); // events | inbox | progress
   const [selectedOrder, setSelectedOrder] = React.useState(null);
+  const [dayLogOpen, setDayLogOpen] = React.useState(false);
   const tick = React.useRef(null);
   const inflight = React.useRef(false);
 
@@ -100,6 +101,9 @@ function App() {
           </div>
         </div>
         <KPIBar state={state}/>
+        <button className="btn ghost" onClick={() => setDayLogOpen(true)} title="Nhật ký ngày">
+          <Icon name="clock" size={15}/> Nhật ký ngày
+        </button>
         <SimControls playing={playing} speed={speed}
           onPlay={() => setPlaying((p) => !p)} onStep={doStep} onReset={doReset} onSpeed={setSpeed}
           onOpenSettings={() => setSettingsOpen(true)}/>
@@ -131,6 +135,7 @@ function App() {
       </div>
       <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)}
         onApplied={(snap) => { setPlaying(false); apply(snap); }}/>
+      <DayLogOverlay open={dayLogOpen} onClose={() => setDayLogOpen(false)}/>
     </div>
   );
 }
