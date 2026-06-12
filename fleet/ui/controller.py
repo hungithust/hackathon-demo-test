@@ -768,6 +768,7 @@ class SimulationController:
                                     new_to = unvisited[0].customer_id
                                     if old_to == new_to:
                                         same_first_leg = True
+                                    else:
                                         eff = max(1.0, shortest_times_from(
                                             self.state.road_graph, home, wade).get(old_to, 1.0))
                                         frac = max(0.0, min(1.0, (

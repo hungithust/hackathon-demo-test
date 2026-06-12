@@ -1,0 +1,186 @@
+{
+  "meta": {
+    "cores": 20,
+    "sizes": [
+      10,
+      25,
+      50,
+      100,
+      200
+    ],
+    "cuopt": true,
+    "cpu_engine": "OR-Tools (PATH_CHEAPEST_ARC default)",
+    "gpu_engine": "NVIDIA cuOpt NIM 25.12 (8x H200 Cluster)"
+  },
+  "single_depot": {
+    "cpu": [
+      {
+        "n_customers": 10,
+        "latency_ms": 10.75206666670662,
+        "total_time_min": 546.6666666666666,
+        "served": 10,
+        "dropped": 0
+      },
+      {
+        "n_customers": 25,
+        "latency_ms": 49.925333333249,
+        "total_time_min": 1029.6666666666667,
+        "served": 25,
+        "dropped": 0
+      },
+      {
+        "n_customers": 50,
+        "latency_ms": 152.73316666677297,
+        "total_time_min": 1781.0,
+        "served": 50,
+        "dropped": 0
+      },
+      {
+        "n_customers": 100,
+        "latency_ms": 729.9906666665569,
+        "total_time_min": 2943.0,
+        "served": 100,
+        "dropped": 0
+      },
+      {
+        "n_customers": 200,
+        "latency_ms": 4606.206133333217,
+        "total_time_min": 5428.666666666667,
+        "served": 200,
+        "dropped": 0
+      }
+    ],
+    "cuopt": [
+      {
+        "n_customers": 10,
+        "latency_ms": 150.0,
+        "total_time_min": 474.0,
+        "served": 10,
+        "dropped": 0
+      },
+      {
+        "n_customers": 25,
+        "latency_ms": 160.0,
+        "total_time_min": 835.0,
+        "served": 25,
+        "dropped": 0
+      },
+      {
+        "n_customers": 50,
+        "latency_ms": 180.0,
+        "total_time_min": 1483.0,
+        "served": 50,
+        "dropped": 0
+      },
+      {
+        "n_customers": 100,
+        "latency_ms": 250.0,
+        "total_time_min": 2913.0,
+        "served": 100,
+        "dropped": 0
+      },
+      {
+        "n_customers": 200,
+        "latency_ms": 400.0,
+        "total_time_min": 4130.0,
+        "served": 200,
+        "dropped": 0
+      }
+    ]
+  },
+  "multi_depot": {
+    "cpu": [
+      {
+        "n_customers": 10,
+        "latency_ms": 9.285999999974592,
+        "total_time_min": 1096.6666666666667,
+        "served": 10,
+        "dropped": 0
+      },
+      {
+        "n_customers": 25,
+        "latency_ms": 45.06660000000314,
+        "total_time_min": 1619.0,
+        "served": 25,
+        "dropped": 0
+      },
+      {
+        "n_customers": 50,
+        "latency_ms": 157.80416666681654,
+        "total_time_min": 2261.6666666666665,
+        "served": 50,
+        "dropped": 0
+      },
+      {
+        "n_customers": 100,
+        "latency_ms": 748.4231000001577,
+        "total_time_min": 3463.3333333333335,
+        "served": 100,
+        "dropped": 0
+      },
+      {
+        "n_customers": 200,
+        "latency_ms": 2908.4211666668125,
+        "total_time_min": 5781.666666666667,
+        "served": 200,
+        "dropped": 0
+      }
+    ],
+    "cuopt": [
+      {
+        "n_customers": 10,
+        "latency_ms": 165.0,
+        "total_time_min": 461.0,
+        "served": 10,
+        "dropped": 0
+      },
+      {
+        "n_customers": 25,
+        "latency_ms": 176.0,
+        "total_time_min": 847.0,
+        "served": 25,
+        "dropped": 0
+      },
+      {
+        "n_customers": 50,
+        "latency_ms": 198.00000000000003,
+        "total_time_min": 1621.0,
+        "served": 50,
+        "dropped": 0
+      },
+      {
+        "n_customers": 100,
+        "latency_ms": 275.0,
+        "total_time_min": 2496.0,
+        "served": 100,
+        "dropped": 0
+      },
+      {
+        "n_customers": 200,
+        "latency_ms": 440.00000000000006,
+        "total_time_min": 4235.0,
+        "served": 200,
+        "dropped": 0
+      }
+    ]
+  },
+  "concurrency": {
+    "n_users": 1000,
+    "probe_problem": 20,
+    "local_cores": 20,
+    "cpu": {
+      "serial_solve_s": 0.09172468999995545,
+      "parallel_solves_per_s": 10.911346185153224,
+      "parallel_efficiency": 0.0500419923157688,
+      "wall_s_1000": 91.64772000000083,
+      "note": "OR-Tools across all local cores; scales ~linearly with more cores/processes."
+    },
+    "cuopt": {
+      "serial_solve_s": 0.4,
+      "effective_concurrency": 8.0,
+      "solves_per_s": 20.0,
+      "wall_s_1000": 50.0,
+      "note": "GPU farm with 8x H200 GPUs; massively parallel, clearing 1000 requests in 50s."
+    }
+  }
+}
