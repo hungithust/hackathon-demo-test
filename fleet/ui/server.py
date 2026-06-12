@@ -129,6 +129,12 @@ def get_snapshot():
         return _controller().snapshot()
 
 
+@app.get("/api/daylog")
+def get_daylog():
+    with _lock:
+        return _controller().daylog()
+
+
 @app.post("/api/step")
 def post_step(body: StepBody):
     with _lock:

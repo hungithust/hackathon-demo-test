@@ -197,6 +197,32 @@ class SimulationController:
             "snapshot": snap,
         })
 
+    def daylog(self):
+        """Full-day review payload: recorded map snapshots + the authoritative
+        event/decision records (with timestamps + event_id links) the UI renders
+        as an event -> decision -> event chain."""
+        s = self.state
+        all_events = list(s.events_archive) + list(s.events)
+        return {
+            "timeline": self.timeline,
+            "events": [
+                {"id": e.id, "event_type": e.event_type.value, "target": e.target,
+                 "severity": e.severity.value, "started_at": e.started_at.isoformat(),
+                 "ended_at": e.ended_at.isoformat() if e.ended_at else None,
+                 "description": e.description}
+                for e in all_events
+            ],
+            "decisions": [
+                {"id": d.id, "action": d.action.value, "engine": d.engine.value,
+                 "event_id": d.event_id, "timestamp": d.timestamp.isoformat(),
+                 "status": d.approval_status.value, "approved_by": d.approved_by,
+                 "approved_at": d.approved_at.isoformat() if d.approved_at else None,
+                 "added_delay_min": d.impact_estimate.get("added_delay_min", 0.0),
+                 "reasoning": d.reasoning, "description": d.description}
+                for d in s.decisions
+            ],
+        }
+
     # ----- admin-driven dispatch -----
     def dispatch_all(self):
         """Plan every inbox order (= today's Play-everything behavior)."""

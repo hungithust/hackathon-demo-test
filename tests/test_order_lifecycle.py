@@ -177,3 +177,26 @@ def test_timeline_records_event_then_decision():
     assert "routes" not in c.timeline[-1]["snapshot"]
     # every entry carries a clock + a re-renderable view-model
     assert all("clock" in e and "snapshot" in e for e in c.timeline)
+
+
+def test_daylog_chains_events_and_decisions():
+    import json
+    c = SimulationController()
+    c.dispatch_all()
+    c.components.simulator.inject_event(
+        c.state, EventType.VEHICLE_BREAKDOWN, "V001", EventSeverity.CRITICAL)
+    c.step(2)
+    log = c.daylog()
+    assert log["timeline"] and log["events"] and log["decisions"]
+    # decisions link back to events for the event->decision->event chain
+    assert any(d["event_id"] for d in log["decisions"])
+    json.dumps(log)   # JSON-safe
+
+
+def test_daylog_endpoint():
+    S._overrides = {}
+    S._ctrl = S.SimulationController()
+    S._ctrl.dispatch_all()
+    S.post_step(S.StepBody(n=1))
+    log = S.get_daylog()
+    assert "timeline" in log and "events" in log and "decisions" in log
