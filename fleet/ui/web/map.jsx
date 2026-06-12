@@ -20,7 +20,7 @@ function MapTip({ tip, mouse }) {
 const RIVER = "M1020,300 C820,360 760,470 700,560 C660,620 720,700 560,720 L1080,720 Z";
 const SPEED_MS = { 1: 2000, 2: 1100, 4: 600 };
 
-function DispatchMap({ state, speed = 2, selectedVeh, onSelectVeh, selectedEvent }) {
+function DispatchMap({ state, speed = 2, selectedVeh, onSelectVeh, selectedEvent, selectedOrder }) {
   const [tip, setTip] = React.useState(null);
   const [mouse, setMouse] = React.useState({ x: 0, y: 0 });
   const [view, setView] = React.useState({ k: 1, x: 0, y: 0 }); // zoom/pan transform
@@ -329,11 +329,14 @@ function DispatchMap({ state, speed = 2, selectedVeh, onSelectVeh, selectedEvent
           const fillColor = isDone ? "#ffffff" : pr.color;
           const strokeColor = isDone ? "#94a3b8" : "#ffffff";
           const p = PNODES[c.id];
+          const isSel = c.id === selectedOrder;
           return (
             <g key={c.id} transform={`translate(${p.x},${p.y})`}
+               className={isSel ? "cust-marker sel" : "cust-marker"}
                onMouseEnter={() => setTip({ id: c.id + " · " + c.name, color: fillColor,
                  rows: [["Type", c.type], ["Status", isDone ? "Delivered ✓" : "Pending orders"], ["Open orders", c.orders]] })}
                onMouseLeave={() => setTip(null)} style={{ cursor: "pointer", opacity: 1.0 }}>
+              {isSel && <circle r={pr.r + 10} fill="none" stroke="#60a5fa" strokeWidth="2.5" opacity="0.9"/>}
               <circle r={pr.r + 4} fill={fillColor} opacity={isDone ? ".25" : ".14"}/>
               <circle r={pr.r} fill={fillColor} stroke={strokeColor} strokeWidth="1.5"/>
               {isDone && <text x="0" y="0.35em" textAnchor="middle" fill="#64748b" style={{ fontSize: pr.r * 1.1, fontWeight: 700 }}>✓</text>}

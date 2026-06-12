@@ -380,4 +380,113 @@ function VoicePanel({ onReport, onReportAudio, clock }) {
   );
 }
 
-Object.assign(window, { KPIBar, SimControls, EventList, ApprovalQueue, FleetStrip, VoicePanel, SeverityChip, EngineBadge });
+// ---------------- INBOX (incoming orders) ----------------
+function InboxPanel({ state, onDispatch }) {
+  const [sel, setSel] = React.useState(() => new Set());
+  const toggle = (id) => setSel((s) => {
+    const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n;
+  });
+  const rows = state.inbox;
+  return (
+    <div className="panel" style={{ flex: 1 }}>
+      <div className="panel-head">
+        <Icon name="inbox" size={15} style={{ color: "var(--accent)" }}/>
+        <h2>Đơn tới</h2>
+        <span className="count">{rows.length}</span>
+      </div>
+      <div className="panel-body pad">
+        {rows.length === 0 ? (
+          <div className="empty"><div className="e-ico"><Icon name="check" size={22}/></div>
+            <div className="e-title">Hết đơn chờ</div>
+            <div className="e-sub">Mọi đơn đã được điều phối.</div></div>
+        ) : rows.map((r) => (
+          <label key={r.customer_id} className={"order-row" + (sel.has(r.customer_id) ? " sel" : "")}
+            style={{ display: "flex", gap: 8, alignItems: "center", padding: "8px 6px", borderBottom: "1px solid var(--border)", cursor: "pointer" }}>
+            <input type="checkbox" checked={sel.has(r.customer_id)} onChange={() => toggle(r.customer_id)}/>
+            <span className="mono" style={{ color: "#60a5fa" }}>{r.customer_id}</span>
+            <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.name}</span>
+            <span className="tag">P{r.priority}</span>
+            <span className="mono" style={{ color: "var(--text-3)" }}>{r.total_qty}</span>
+          </label>
+        ))}
+      </div>
+      <div style={{ display: "flex", gap: 8, padding: 10, borderTop: "1px solid var(--border)" }}>
+        <button className="btn" disabled={sel.size === 0}
+          onClick={() => { onDispatch({ customer_ids: [...sel] }); setSel(new Set()); }}>
+          Giao đã chọn ({sel.size})
+        </button>
+        <button className="btn primary" style={{ marginLeft: "auto" }}
+          onClick={() => onDispatch({ all: true })}>Giao tất cả</button>
+      </div>
+    </div>
+  );
+}
+
+const ORDER_STATUS = {
+  queued:    { label: "Đang chờ xe", color: "#94a3b8" },
+  en_route:  { label: "Đang giao",   color: "#f59e0b" },
+  delivered: { label: "Đã giao",     color: "#22c55e" },
+};
+
+// ---------------- ORDER PROGRESS ----------------
+function ProgressPanel({ state, selectedVeh, selectedOrder, onSelectOrder }) {
+  let rows = state.ordersInProgress;
+  if (selectedVeh) rows = rows.filter((o) => o.vehicle_id === selectedVeh);  // vehicle -> its orders
+  return (
+    <div className="panel" style={{ flex: 1 }}>
+      <div className="panel-head">
+        <Icon name="truck" size={15} style={{ color: "var(--text-2)" }}/>
+        <h2>Tiến trình{selectedVeh ? " · " + selectedVeh : ""}</h2>
+        <span className="count">{rows.length}</span>
+      </div>
+      <div className="panel-body">
+        {rows.length === 0 ? (
+          <div className="empty"><div className="e-ico"><Icon name="inbox" size={22}/></div>
+            <div className="e-title">Chưa giao đơn nào</div>
+            <div className="e-sub">Chọn đơn ở tab “Đơn tới” rồi bấm giao.</div></div>
+        ) : rows.map((o) => {
+          const st = ORDER_STATUS[o.status];
+          const isSel = selectedOrder === o.customer_id;
+          return (
+            <div key={o.vehicle_id + ":" + o.customer_id}
+              className={"event-row" + (isSel ? " sel" : "")}
+              style={{ "--ev-accent": st.color }}
+              onClick={() => onSelectOrder(isSel ? null : o.customer_id)}>
+              <div className="ev-main">
+                <div className="ev-top">
+                  <span className="ev-type">{o.customer_id} · {o.name}</span>
+                  <span className="tag" style={{ color: st.color }}>{st.label}</span>
+                </div>
+                <div className="ev-meta">
+                  <span className="mono" style={{ color: "#60a5fa" }}>{o.vehicle_id}</span>
+                  <span className="mono">dừng {o.sequence}/{o.stops_total}</span>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      {selectedOrder && <OrderDetail state={state} cid={selectedOrder}/>}
+    </div>
+  );
+}
+
+// ---------------- ORDER DETAIL ----------------
+function OrderDetail({ state, cid }) {
+  const o = state.ordersInProgress.find((x) => x.customer_id === cid);
+  if (!o) return null;
+  const st = ORDER_STATUS[o.status];
+  return (
+    <div style={{ borderTop: "1px solid var(--border)", padding: 10, fontSize: 12 }}>
+      <div style={{ fontWeight: 600, marginBottom: 6 }}>{o.customer_id} · {o.name}</div>
+      <div className="tt-row"><span>Xe phụ trách</span><span className="mono" style={{ color: "#60a5fa" }}>{o.vehicle_id}</span></div>
+      <div className="tt-row"><span>Trạng thái</span><span style={{ color: st.color }}>{st.label}</span></div>
+      <div className="tt-row"><span>Thứ tự dừng</span><span className="mono">{o.sequence}/{o.stops_total}</span></div>
+      <div className="tt-row"><span>Khối lượng</span><span className="mono">{Math.round(o.demand_kg)} kg</span></div>
+      <div className="tt-row"><span>Dự kiến đến</span><span className="mono">{o.planned_arrival ? fmtClock(o.planned_arrival) : "—"}</span></div>
+      <div className="tt-row"><span>Thực tế đến</span><span className="mono">{o.actual_arrival ? fmtClock(o.actual_arrival) : "—"}</span></div>
+    </div>
+  );
+}
+
+Object.assign(window, { KPIBar, SimControls, EventList, ApprovalQueue, FleetStrip, VoicePanel, SeverityChip, EngineBadge, InboxPanel, ProgressPanel, OrderDetail });

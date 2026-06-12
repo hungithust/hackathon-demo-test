@@ -27,6 +27,8 @@ function normalize(snap) {
     resolved: snap.resolved || [],
     autoHandled: snap.auto_handled || [],
     routes: snap.routes || [],
+    inbox: snap.inbox || [],
+    ordersInProgress: snap.orders_in_progress || [],
   };
 }
 
@@ -36,6 +38,7 @@ function emptyState() {
     depot: { lat: 10.8231, lng: 106.6297, name: "Depot" },
     depots: [{ id: "DEPOT", lat: 10.8231, lng: 106.6297, name: "Depot" }],
     customers: [], vehicles: [], events: [], decisions: [], resolved: [], autoHandled: [], routes: [],
+    inbox: [], ordersInProgress: [],
   };
 }
 
@@ -62,6 +65,7 @@ const Api = {
   step:     async (n = 1) => normalize(await jpost("/api/step", { n })),
   approve:  async (id) => normalize(await jpost("/api/approve/" + encodeURIComponent(id))),
   reject:   async (id) => normalize(await jpost("/api/reject/" + encodeURIComponent(id))),
+  dispatch: async (body) => normalize(await jpost("/api/dispatch", body)),
   reset:    async () => normalize(await jpost("/api/reset")),
   report:   async (text) => {
     const res = await jpost("/api/report", { text });

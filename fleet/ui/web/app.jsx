@@ -13,6 +13,8 @@ function App() {
   const [selectedEvent, setSelectedEvent] = React.useState(null);
   const [queueView, setQueueView] = React.useState("pending");
   const [settingsOpen, setSettingsOpen] = React.useState(false);
+  const [leftTab, setLeftTab] = React.useState("events"); // events | inbox | progress
+  const [selectedOrder, setSelectedOrder] = React.useState(null);
   const tick = React.useRef(null);
   const inflight = React.useRef(false);
 
@@ -68,6 +70,7 @@ function App() {
   const doReset = () => { setPlaying(false); setSelectedVeh(null); setSelectedEvent(null); guard(() => Api.reset()); };
   const onApprove = (id) => guard(() => Api.approve(id));
   const onReject = (id) => guard(() => Api.reject(id));
+  const onDispatch = (body) => guard(() => Api.dispatch(body));
 
   const onReport = async (raw) => {
     const res = await runExclusive(() => Api.report(raw));
@@ -104,12 +107,19 @@ function App() {
 
       <div className="workspace">
         <div className="col">
-          <EventList state={state} selected={selectedEvent} onSelect={setSelectedEvent}/>
+          <div className="toggle-tabs" style={{ margin: "0 0 8px" }}>
+            <button className={leftTab === "events" ? "on" : ""} onClick={() => setLeftTab("events")}>Sự kiện</button>
+            <button className={leftTab === "inbox" ? "on" : ""} onClick={() => setLeftTab("inbox")}>Đơn tới <span className="count">{state.inbox.length}</span></button>
+            <button className={leftTab === "progress" ? "on" : ""} onClick={() => setLeftTab("progress")}>Tiến trình</button>
+          </div>
+          {leftTab === "events" && <EventList state={state} selected={selectedEvent} onSelect={setSelectedEvent}/>}
+          {leftTab === "inbox" && <InboxPanel state={state} onDispatch={onDispatch}/>}
+          {leftTab === "progress" && <ProgressPanel state={state} selectedVeh={selectedVeh} selectedOrder={selectedOrder} onSelectOrder={setSelectedOrder}/>}
         </div>
 
         <div className="col col-center">
           <div className="panel" style={{ flex: 1, padding: 0, overflow: "hidden" }}>
-            <DispatchMap state={state} speed={speed} selectedVeh={selectedVeh} onSelectVeh={setSelectedVeh} selectedEvent={selectedEvent}/>
+            <DispatchMap state={state} speed={speed} selectedVeh={selectedVeh} onSelectVeh={setSelectedVeh} selectedEvent={selectedEvent} selectedOrder={selectedOrder}/>
           </div>
           <FleetStrip state={state} selectedVeh={selectedVeh} onSelectVeh={setSelectedVeh}/>
         </div>
