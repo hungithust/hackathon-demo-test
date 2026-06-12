@@ -172,13 +172,15 @@ class WorldSimulator:
 
         if state.sim_tick - self._last_accident_tick >= 2:
             if self.rng.random() < 0.6:
-                # Exclude direct DEPOT exit/entry edges so disruptions appear
-                # in the mid-network, not on depot access roads.
+                # Exclude direct depot exit/entry edges so disruptions appear
+                # in the mid-network, not on depot access roads (any depot in
+                # multi-depot worlds).
+                depot_nodes = set(state.all_depots())
                 open_edges = [
                     e for e in state.road_graph.edges.values()
                     if e.status == EdgeStatus.OPEN
-                    and e.from_node != "DEPOT"
-                    and e.to_node != "DEPOT"
+                    and e.from_node not in depot_nodes
+                    and e.to_node not in depot_nodes
                 ]
                 if not open_edges:  # fallback when graph has only depot edges
                     open_edges = [e for e in state.road_graph.edges.values()
@@ -413,7 +415,7 @@ class WorldSimulator:
             shift_done = route.end_time is None or state.clock >= route.end_time
             if all_visited and shift_done:
                 vehicle.status = VehicleStatus.AT_DEPOT
-                vehicle.pos = state.depot.location
+                vehicle.pos = state.depot_of(vehicle).location
                 vehicle.current_stop_index = -1
 
     def _advance_vehicles_live(self, state: WorldState) -> None:
@@ -434,21 +436,21 @@ class WorldSimulator:
                 cur_time = last.actual_departure or (
                     last.actual_arrival + timedelta(minutes=DEFAULT_SERVICE_TIME_MIN))
             else:
-                cur_node = "DEPOT"
+                cur_node = vehicle.home_depot
                 if route.stops:
                     first_stop = route.stops[0]
-                    cache_key = ("DEPOT", float(vehicle.wade_capability))
+                    cache_key = (cur_node, float(vehicle.wade_capability))
                     dist = self._travel_time_cache.get(cache_key)
                     if dist is None:
-                        dist = shortest_times_from(state.road_graph, "DEPOT", vehicle.wade_capability)
+                        dist = shortest_times_from(state.road_graph, cur_node, vehicle.wade_capability)
                         self._travel_time_cache[cache_key] = dist
-                    
+
                     if first_stop.customer_id in dist:
                         cur_time = first_stop.planned_arrival - timedelta(minutes=dist[first_stop.customer_id])
                     else:
-                        cur_time = state.depot.opening_time
+                        cur_time = state.depot_of(vehicle).opening_time
                 else:
-                    cur_time = state.depot.opening_time
+                    cur_time = state.depot_of(vehicle).opening_time
 
             for stop in sorted(route.stops, key=lambda s: s.sequence):
                 if stop.actual_arrival is not None:
@@ -488,7 +490,7 @@ class WorldSimulator:
             shift_done = route.end_time is None or state.clock >= route.end_time
             if all_visited and shift_done:
                 vehicle.status = VehicleStatus.AT_DEPOT
-                vehicle.pos = state.depot.location
+                vehicle.pos = state.depot_of(vehicle).location
                 vehicle.current_stop_index = -1
 
     def _deliver(self, state: WorldState, vehicle: "Vehicle",

@@ -77,12 +77,13 @@ def is_event_on_any_route(state: WorldState, event) -> bool:
                 else:
                     G.add_edge(e.from_node, e.to_node, weight=weight)
             
+            home = v.home_depot if v and v.home_depot in state.all_depots() else "DEPOT"
             visited = [s for s in route.stops if s.actual_arrival is not None]
             unvisited = [s for s in route.stops if s.actual_arrival is None]
-            current_node = visited[-1].customer_id if visited else "DEPOT"
-            
-            # The future path is from current_node -> unvisited_1 -> ... -> DEPOT
-            nodes = [current_node] + [s.customer_id for s in unvisited] + ["DEPOT"]
+            current_node = visited[-1].customer_id if visited else home
+
+            # The future path is from current_node -> unvisited_1 -> ... -> home depot
+            nodes = [current_node] + [s.customer_id for s in unvisited] + [home]
             
             for i in range(len(nodes) - 1):
                 u, v_node = nodes[i], nodes[i+1]
@@ -112,7 +113,9 @@ def get_affected_vehicle_ids(state: WorldState, event) -> list:
         if not unvisited:
             continue
         visited = [s for s in route.stops if s.actual_arrival is not None]
-        current_node = visited[-1].customer_id if visited else "DEPOT"
+        _v = state.get_vehicle(vid)
+        home = _v.home_depot if _v and _v.home_depot in state.all_depots() else "DEPOT"
+        current_node = visited[-1].customer_id if visited else home
 
         if event.target in state.customers:
             if any(s.customer_id == event.target for s in unvisited):
@@ -137,7 +140,7 @@ def get_affected_vehicle_ids(state: WorldState, event) -> list:
             else:
                 G.add_edge(e.from_node, e.to_node, weight=weight)
 
-        nodes = [current_node] + [s.customer_id for s in unvisited] + ["DEPOT"]
+        nodes = [current_node] + [s.customer_id for s in unvisited] + [home]
         found = False
         for i in range(len(nodes) - 1):
             u, v_node = nodes[i], nodes[i + 1]
@@ -270,15 +273,18 @@ def run_loop(state: WorldState, components: Components, n_ticks: int,
                         # position → new proposed stops → DEPOT.
                         routes = {}
                         for vid, vr in proposed.items():
+                            _v = state.get_vehicle(vid)
+                            home = (_v.home_depot if _v and _v.home_depot in state.all_depots()
+                                    else "DEPOT")
                             visited_s = [s for s in vr.stops if s.actual_arrival is not None]
                             unvisited_s = sorted(
                                 [s for s in vr.stops if s.actual_arrival is None],
                                 key=lambda s: s.sequence)
-                            cur = visited_s[-1].customer_id if visited_s else "DEPOT"
+                            cur = visited_s[-1].customer_id if visited_s else home
                             routes[vid] = (
                                 [cur]
                                 + [s.customer_id for s in unvisited_s]
-                                + ["DEPOT"]
+                                + [home]
                             )
                         if d.execution_result is None:
                             d.execution_result = {}

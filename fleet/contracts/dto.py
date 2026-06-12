@@ -16,7 +16,9 @@ class FleetVehicleSpec:
     shift_start: datetime
     shift_end: datetime
     start_location: str = ""
-    # route always starts at start_location and ends at the depot
+    end_location: str = ""
+    # route starts at start_location and ends at end_location
+    # (end_location defaults to the depot when empty — see solvers)
 
 
 @dataclass

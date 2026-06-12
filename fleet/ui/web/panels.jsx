@@ -120,7 +120,7 @@ function DecisionCard({ dec, state, onApprove, onReject }) {
             {affectedVids.length} xe bị ảnh hưởng — tuyến mới:
           </div>
           {Object.entries(dec.proposed_routes).map(([vid, nodes]) => {
-            const stops = (nodes || []).filter(n => n !== "DEPOT");
+            const stops = (nodes || []).filter(n => n !== "DEPOT" && !/^D\d+$/.test(n));
             const preview = stops.length > 0
               ? stops.slice(0, 3).join(" → ") + (stops.length > 3 ? ` →+${stops.length - 3}` : "")
               : "(không đổi)";

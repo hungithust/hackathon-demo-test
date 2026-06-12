@@ -33,8 +33,9 @@ CORE_SPECS: List[FieldSpec] = [
     FieldSpec("FORECASTER_ENGINE", "forecaster_engine", "Forecaster", "select",
               "Engines", choices=("ewma", "holt")),
     FieldSpec("WORLD", "world", "World", "select", "World & Time",
-              choices=("sample", "real"),
-              help="real needs data/hcm_drive.graphml + osmnx; else sample."),
+              choices=("sample", "real", "multidepot"),
+              help="sample = 1 depot/10 veh; multidepot = 5 depots/50 veh/50 stops; "
+                   "real needs data/hcm_drive.graphml + osmnx."),
     FieldSpec("SEED", "seed", "Random seed", "number", "World & Time", step="1"),
     FieldSpec("TICK_MINUTES", "tick_minutes", "Minutes per tick", "number",
               "World & Time", step="1"),
