@@ -179,6 +179,18 @@ def test_timeline_records_event_then_decision():
     assert all("clock" in e and "snapshot" in e for e in c.timeline)
 
 
+def test_daylog_records_latest_snapshot_after_steps():
+    c = SimulationController()
+    c.dispatch_all()
+    c.step(1)
+    c.step(1)
+
+    log = c.daylog()
+    ticks = [entry["sim_tick"] for entry in log["timeline"]]
+    assert ticks[-1] == c.state.sim_tick
+    assert len(set(ticks)) >= 2
+
+
 def test_daylog_chains_events_and_decisions():
     import json
     c = SimulationController()
