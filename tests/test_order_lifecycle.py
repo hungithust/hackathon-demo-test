@@ -115,3 +115,32 @@ def test_dispatch_orders_is_a_wave():
     c.dispatch_orders(["C001"])
     planned = {s.customer_id for vr in c.state.plan.values() for s in vr.stops}
     assert planned == {"C001"}
+
+
+def test_inbox_holds_undispatched_orders():
+    c = SimulationController()
+    snap = c.snapshot()
+    inbox_ids = {r["customer_id"] for r in snap["inbox"]}
+    pending = {cid for cid in c.state.customers
+               if sum(c.state.customers[cid].orders.values()) > 0}
+    assert inbox_ids == pending
+    assert snap["orders_in_progress"] == []
+
+
+def test_dispatch_moves_order_from_inbox_to_progress():
+    c = SimulationController()
+    c.dispatch_orders(["C001"])
+    snap = c.snapshot()
+    assert "C001" not in {r["customer_id"] for r in snap["inbox"]}
+    prog = {o["customer_id"]: o for o in snap["orders_in_progress"]}
+    assert "C001" in prog
+    assert prog["C001"]["vehicle_id"]          # order<->vehicle link is present
+    assert prog["C001"]["status"] in ("queued", "en_route", "delivered")
+
+
+def test_snapshot_with_inbox_is_json_safe():
+    import json
+    c = SimulationController()
+    c.dispatch_orders(["C001"])
+    c.step(1)
+    json.dumps(c.snapshot())

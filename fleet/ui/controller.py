@@ -459,6 +459,61 @@ class SimulationController:
                 return {"lat": poly[-1][0], "lng": poly[-1][1], "name": n.location.name}
         return {"lat": n.location.lat, "lng": n.location.lng, "name": n.location.name}
 
+    def _dispatched_customer_ids(self) -> set:
+        return {s.customer_id for vr in self.state.plan.values() for s in vr.stops}
+
+    def _inbox(self):
+        dispatched = self._dispatched_customer_ids()
+        rows = []
+        for c in self.state.customers.values():
+            if c.id in dispatched:
+                continue
+            total = sum(c.orders.values())
+            if total <= 0:
+                continue
+            rows.append({
+                "customer_id": c.id,
+                "name": c.location.name,
+                "type": c.type,
+                "priority": c.priority,
+                "orders": dict(c.orders),
+                "total_qty": total,
+                "demand_kg": float(total),
+                "tw_start": c.time_window.start.isoformat(),
+                "tw_end": c.time_window.end.isoformat(),
+                "sla_deadline": c.sla_deadline.isoformat() if c.sla_deadline else None,
+            })
+        rows.sort(key=lambda r: (r["priority"], r["customer_id"]))
+        return rows
+
+    def _orders_in_progress(self):
+        out = []
+        for vid, vr in self.state.plan.items():
+            stops = sorted(vr.stops, key=lambda s: s.sequence)
+            total = len(stops)
+            nxt = next((s for s in stops if s.actual_arrival is None), None)
+            for s in stops:
+                c = self.state.customers.get(s.customer_id)
+                if s.actual_arrival is not None:
+                    status = "delivered"
+                elif nxt is not None and s.sequence == nxt.sequence:
+                    status = "en_route"
+                else:
+                    status = "queued"
+                out.append({
+                    "customer_id": s.customer_id,
+                    "name": c.location.name if c else s.customer_id,
+                    "vehicle_id": vid,
+                    "sequence": s.sequence,
+                    "stops_total": total,
+                    "status": status,
+                    "priority": c.priority if c else 4,
+                    "demand_kg": float(s.demand_kg),
+                    "planned_arrival": s.planned_arrival.isoformat() if s.planned_arrival else None,
+                    "actual_arrival": s.actual_arrival.isoformat() if s.actual_arrival else None,
+                })
+        return out
+
     # ----- view model -----
     def snapshot(self) -> Dict:
         s = self.state
@@ -471,6 +526,8 @@ class SimulationController:
             "clock": s.clock.isoformat(),
             "sim_tick": s.sim_tick,
             "pending_orders": s.total_orders_pending(),
+            "inbox": self._inbox(),
+            "orders_in_progress": self._orders_in_progress(),
             "vehicles": [self._vehicle_view(v) for v in s.vehicles.values()],
             "active_events": [
                 {"id": e.id, "event_type": e.event_type.value,
