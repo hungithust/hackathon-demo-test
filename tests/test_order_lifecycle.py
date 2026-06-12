@@ -144,3 +144,20 @@ def test_snapshot_with_inbox_is_json_safe():
     c.dispatch_orders(["C001"])
     c.step(1)
     json.dumps(c.snapshot())
+
+
+from fleet.ui import server as S
+
+
+def test_dispatch_endpoint_all():
+    S._overrides = {}
+    S._ctrl = S.SimulationController()
+    snap = S.post_dispatch(S.DispatchBody(all=True))
+    assert snap["orders_in_progress"], "deliver-all should populate progress"
+
+
+def test_dispatch_endpoint_selected():
+    S._overrides = {}
+    S._ctrl = S.SimulationController()
+    snap = S.post_dispatch(S.DispatchBody(customer_ids=["C001"]))
+    assert "C001" not in {r["customer_id"] for r in snap["inbox"]}

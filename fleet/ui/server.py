@@ -110,6 +110,11 @@ class StepBody(BaseModel):
     n: int = 1
 
 
+class DispatchBody(BaseModel):
+    customer_ids: list = []
+    all: bool = False
+
+
 class ReportBody(BaseModel):
     text: str = ""
 
@@ -129,6 +134,17 @@ def post_step(body: StepBody):
     with _lock:
         c = _controller()
         c.step(max(1, min(int(body.n), 50)))
+        return c.snapshot()
+
+
+@app.post("/api/dispatch")
+def post_dispatch(body: DispatchBody):
+    with _lock:
+        c = _controller()
+        if body.all:
+            c.dispatch_all()
+        else:
+            c.dispatch_orders(body.customer_ids)
         return c.snapshot()
 
 
