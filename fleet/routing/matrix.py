@@ -250,7 +250,9 @@ def build_multi_route_matrices(graph: RoadGraph, locations: List[str],
 
 
 def build_routing_problem(state: WorldState,
-                          depot_id: str = "DEPOT") -> RoutingProblem:
+                          depot_id: str = "DEPOT",
+                          customer_ids=None,
+                          vehicle_ids=None) -> RoutingProblem:
     """Assemble a solver-ready RoutingProblem from the current world.
 
     - locations: depot first, then customers that still have pending orders.
@@ -260,7 +262,8 @@ def build_routing_problem(state: WorldState,
     - tasks: one TaskSpec per pending customer (demand_kg = total order units).
     """
     pending = [cid for cid in sorted(state.customers)
-               if sum(state.customers[cid].orders.values()) > 0]
+               if sum(state.customers[cid].orders.values()) > 0
+               and (customer_ids is None or cid in customer_ids)]
     # All depot nodes lead the location list (multi-depot worlds have >1). Guard
     # against a caller's default depot_id (e.g. "DEPOT") that isn't a real depot in
     # this world — fall back to the primary depot so no phantom node is created.
@@ -273,7 +276,8 @@ def build_routing_problem(state: WorldState,
 
     # broken / in-maintenance vehicles can't take new work -> excluded from the solve.
     available = [v for v in state.vehicles.values()
-                 if v.status not in (VehicleStatus.BROKEN, VehicleStatus.MAINTENANCE)]
+                 if v.status not in (VehicleStatus.BROKEN, VehicleStatus.MAINTENANCE)
+                 and (vehicle_ids is None or v.id in vehicle_ids)]
 
     from datetime import timedelta
     
