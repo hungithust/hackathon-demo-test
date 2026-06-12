@@ -73,6 +73,9 @@ def test_approving_a_reroute_resolves_routes():
     c = SimulationController()
     c.state.customers["C001"].orders = {"SKUX": 20}
     c.state.depot.inventory["SKUX"] = 200
+    # dispatch the order first: under the gated model a reroute only re-solves
+    # already-dispatched customers, so there must be a live route to reroute.
+    c.dispatch_orders(["C001"])
     # a manual REROUTE decision sitting pending
     from fleet.contracts.state import Decision, DecisionEngine
     d = Decision(id="DEC_MANUAL", timestamp=c.state.clock, event_id=None,

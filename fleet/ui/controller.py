@@ -171,7 +171,22 @@ class SimulationController:
     def step(self, n_ticks: int = 1):
         from fleet.loop import run_loop
         run_loop(self.state, self.components, max(1, int(n_ticks)),
-                 settings=self.settings, logger=_silent)
+                 settings=self.settings, logger=_silent, auto_plan=False)
+        return self
+
+    # ----- admin-driven dispatch -----
+    def dispatch_all(self):
+        """Plan every inbox order (= today's Play-everything behavior)."""
+        from fleet.routing.planner import plan_routes
+        plan_routes(self.state, self.components.optimizer)
+        return self
+
+    def dispatch_orders(self, customer_ids):
+        """Dispatch a wave for the selected inbox customers onto idle vehicles."""
+        from fleet.routing.planner import plan_wave
+        ids = [cid for cid in customer_ids if cid in self.state.customers]
+        if ids:
+            plan_wave(self.state, self.components.optimizer, set(ids))
         return self
 
     # ----- view model helpers -----
@@ -677,8 +692,9 @@ class SimulationController:
                                         s.planned_departure += shift
                 self.state.plan.update(proposed_plan)
             else:
-                # Fallback: full re-solve (e.g. REPRIORITIZE / REALLOCATE)
-                reroute(self.state, self.components.optimizer)
+                # Fallback: full re-solve, scoped to already-dispatched customers
+                dispatched = {s.customer_id for vr in self.state.plan.values() for s in vr.stops}
+                reroute(self.state, self.components.optimizer, customer_ids=dispatched)
 
             added = max(0.0, plan_total_minutes(self.state) - before)
             d.impact_estimate["added_delay_min"] = round(added, 1)

@@ -90,3 +90,28 @@ def test_run_loop_default_still_auto_plans():
     run_loop(state, _bc(settings), n_ticks=1, settings=settings,
              logger=lambda *a, **k: None)
     assert state.plan, "headless default must keep auto-planning"
+
+
+from fleet.ui.controller import SimulationController
+
+
+def test_controller_does_not_auto_dispatch_on_step():
+    c = SimulationController()
+    c.step(2)
+    assert c.state.plan == {}, "stepping must not dispatch anything by itself"
+
+
+def test_dispatch_all_matches_full_plan_routes():
+    c = SimulationController()
+    c.dispatch_all()
+    planned = {s.customer_id for vr in c.state.plan.values() for s in vr.stops}
+    pending = {cid for cid in c.state.customers
+               if sum(c.state.customers[cid].orders.values()) > 0}
+    assert planned == pending
+
+
+def test_dispatch_orders_is_a_wave():
+    c = SimulationController()
+    c.dispatch_orders(["C001"])
+    planned = {s.customer_id for vr in c.state.plan.values() for s in vr.stops}
+    assert planned == {"C001"}
