@@ -18,8 +18,9 @@ from fleet.routing.matrix import (
 
 
 def _build_plan(state: WorldState, optimizer: RouteOptimizer,
-                depot_id: str = "DEPOT") -> Tuple[List[str], Dict[str, VehicleRoute]]:
-    problem = build_routing_problem(state, depot_id)
+                depot_id: str = "DEPOT",
+                customer_ids=None) -> Tuple[List[str], Dict[str, VehicleRoute]]:
+    problem = build_routing_problem(state, depot_id, customer_ids=customer_ids)
     solution = optimizer.solve(problem)
     new_plan = {}
     for vid, solved in solution.routes.items():
@@ -70,9 +71,10 @@ def plan_total_minutes(state: WorldState) -> float:
 
 
 def preview_reroute(state: WorldState, optimizer: RouteOptimizer,
-                    depot_id: str = "DEPOT") -> Tuple[List[str], Dict[str, VehicleRoute]]:
+                    depot_id: str = "DEPOT",
+                    customer_ids=None) -> Tuple[List[str], Dict[str, VehicleRoute]]:
     old_plan = {vid: route for vid, route in state.plan.items()}
-    dropped, new_plan = _build_plan(state, optimizer, depot_id)
+    dropped, new_plan = _build_plan(state, optimizer, depot_id, customer_ids=customer_ids)
     
     for vid, new_route in new_plan.items():
         if vid in old_plan:
@@ -148,8 +150,8 @@ def preview_reroute(state: WorldState, optimizer: RouteOptimizer,
 
 
 def reroute(state: WorldState, optimizer: RouteOptimizer,
-            depot_id: str = "DEPOT") -> List[str]:
-    dropped, new_plan = preview_reroute(state, optimizer, depot_id)
+            depot_id: str = "DEPOT", customer_ids=None) -> List[str]:
+    dropped, new_plan = preview_reroute(state, optimizer, depot_id, customer_ids=customer_ids)
     state.plan = new_plan
     return dropped
 

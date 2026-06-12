@@ -21,3 +21,26 @@ def test_build_problem_no_filter_is_unchanged():
     prob = build_routing_problem(state)
     pending = {c for c in state.customers if sum(state.customers[c].orders.values()) > 0}
     assert {t.customer_id for t in prob.tasks} == pending
+
+
+from fleet.routing.planner import reroute, _build_plan
+from fleet.factory import build_components
+from config.settings import load_settings
+
+
+def _optimizer():
+    return build_components(load_settings()).optimizer
+
+
+def test_build_plan_respects_customer_filter():
+    state = build_sample_state()
+    _dropped, plan = _build_plan(state, _optimizer(), customer_ids={"C001"})
+    planned = {s.customer_id for vr in plan.values() for s in vr.stops}
+    assert planned <= {"C001"}
+
+
+def test_reroute_respects_customer_filter():
+    state = build_sample_state()
+    reroute(state, _optimizer(), customer_ids={"C001", "C002"})
+    planned = {s.customer_id for vr in state.plan.values() for s in vr.stops}
+    assert planned <= {"C001", "C002"}
