@@ -163,8 +163,9 @@ def get_affected_vehicle_ids(state: WorldState, event) -> list:
 
 
 def run_loop(state: WorldState, components: Components, n_ticks: int,
-             settings, logger: Callable[..., None] = print) -> WorldState:
-    if not state.plan and state.total_orders_pending() > 0:
+             settings, logger: Callable[..., None] = print,
+             auto_plan: bool = True) -> WorldState:
+    if auto_plan and not state.plan and state.total_orders_pending() > 0:
         plan_routes(state, components.optimizer)
     for _ in range(n_ticks):
         components.simulator.tick(state)
@@ -317,7 +318,11 @@ def run_loop(state: WorldState, components: Components, n_ticks: int,
 
         if needs_resolve and state.total_orders_pending() > 0:
             before = plan_total_minutes(state)
-            reroute(state, components.optimizer)
+            if auto_plan:
+                reroute(state, components.optimizer)
+            else:
+                dispatched = {s.customer_id for vr in state.plan.values() for s in vr.stops}
+                reroute(state, components.optimizer, customer_ids=dispatched)
             added = max(0.0, plan_total_minutes(state) - before)
             # Record the *measured* delay the re-solve caused, replacing the
             # engine's self-estimate so the UI reflects reality.

@@ -70,3 +70,23 @@ def test_plan_wave_merges_without_touching_busy_vehicles():
     assert state.plan[busy_vid] is busy_route_before, "busy vehicle's route was replaced"
     planned = {s.customer_id for vr in state.plan.values() for s in vr.stops}
     assert {"C001", "C002"} <= planned
+
+
+from fleet.loop import run_loop
+from fleet.factory import build_components as _bc
+
+
+def test_run_loop_no_auto_plan_leaves_world_undispatched():
+    state = build_sample_state()
+    settings = load_settings()
+    run_loop(state, _bc(settings), n_ticks=2, settings=settings,
+             logger=lambda *a, **k: None, auto_plan=False)
+    assert state.plan == {}, "gated loop must not auto-plan the world"
+
+
+def test_run_loop_default_still_auto_plans():
+    state = build_sample_state()
+    settings = load_settings()
+    run_loop(state, _bc(settings), n_ticks=1, settings=settings,
+             logger=lambda *a, **k: None)
+    assert state.plan, "headless default must keep auto-planning"
