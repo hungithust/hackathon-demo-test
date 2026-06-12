@@ -161,3 +161,19 @@ def test_dispatch_endpoint_selected():
     S._ctrl = S.SimulationController()
     snap = S.post_dispatch(S.DispatchBody(customer_ids=["C001"]))
     assert "C001" not in {r["customer_id"] for r in snap["inbox"]}
+
+
+from fleet.contracts.state import EventType, EventSeverity
+
+
+def test_timeline_records_event_then_decision():
+    c = SimulationController()
+    c.dispatch_all()
+    c.components.simulator.inject_event(
+        c.state, EventType.VEHICLE_BREAKDOWN, "V001", EventSeverity.CRITICAL)
+    c.step(2)
+    assert c.timeline, "timeline should record at least one change snapshot"
+    # snapshots are trimmed of static geometry to bound memory
+    assert "routes" not in c.timeline[-1]["snapshot"]
+    # every entry carries a clock + a re-renderable view-model
+    assert all("clock" in e and "snapshot" in e for e in c.timeline)

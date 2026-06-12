@@ -58,6 +58,8 @@ class SimulationController:
             self.state = build_sample_state(urban_speed_kmh=self.settings.urban_speed_kmh)
             self.geometry = self._generate_synthetic_geometry(self.state)
         self.components = build_components(self.settings)
+        self.timeline = []
+        self._last_log_sig = None
 
     def _generate_synthetic_geometry(self, state):
         import math, random
@@ -172,13 +174,35 @@ class SimulationController:
         from fleet.loop import run_loop
         run_loop(self.state, self.components, max(1, int(n_ticks)),
                  settings=self.settings, logger=_silent, auto_plan=False)
+        self._record_timeline()
         return self
+
+    def _record_timeline(self):
+        """Append a view-model snapshot whenever the set of active events or the
+        decision statuses changed since the last record. The map geometry (`routes`)
+        is static, so it is dropped here and re-applied client-side to bound memory."""
+        sig = (
+            tuple(sorted(e.id for e in self.state.get_active_events())),
+            tuple(sorted((d.id, d.approval_status.value) for d in self.state.decisions)),
+        )
+        if sig == self._last_log_sig:
+            return
+        self._last_log_sig = sig
+        snap = self.snapshot()
+        snap.pop("routes", None)
+        self.timeline.append({
+            "seq": len(self.timeline),
+            "clock": self.state.clock.isoformat(),
+            "sim_tick": self.state.sim_tick,
+            "snapshot": snap,
+        })
 
     # ----- admin-driven dispatch -----
     def dispatch_all(self):
         """Plan every inbox order (= today's Play-everything behavior)."""
         from fleet.routing.planner import plan_routes
         plan_routes(self.state, self.components.optimizer)
+        self._record_timeline()
         return self
 
     def dispatch_orders(self, customer_ids):
@@ -187,6 +211,7 @@ class SimulationController:
         ids = [cid for cid in customer_ids if cid in self.state.customers]
         if ids:
             plan_wave(self.state, self.components.optimizer, set(ids))
+        self._record_timeline()
         return self
 
     # ----- view model helpers -----
