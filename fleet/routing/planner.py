@@ -17,11 +17,8 @@ from fleet.routing.matrix import (
 )
 
 
-def _build_plan(state: WorldState, optimizer: RouteOptimizer,
-                depot_id: str = "DEPOT",
-                customer_ids=None) -> Tuple[List[str], Dict[str, VehicleRoute]]:
-    problem = build_routing_problem(state, depot_id, customer_ids=customer_ids)
-    solution = optimizer.solve(problem)
+def _build_plan_from_solution(state: WorldState, solution,
+                              depot_id: str = "DEPOT") -> Tuple[List[str], Dict[str, VehicleRoute]]:
     new_plan = {}
     for vid, solved in solution.routes.items():
         if not solved:
@@ -40,9 +37,9 @@ def _build_plan(state: WorldState, optimizer: RouteOptimizer,
 
         first_leg_min = shortest_times_from(state.road_graph, home, wade).get(stops[0].customer_id, 0.0)
         last_leg_min = shortest_times_from(state.road_graph, stops[-1].customer_id, wade).get(home, 0.0)
-        
+
         start_time = stops[0].planned_arrival - __import__("datetime").timedelta(minutes=first_leg_min)
-        
+
         new_plan[vid] = VehicleRoute(
             vehicle_id=vid, stops=stops,
             total_time=solution.metrics.get("total_time_min", 0.0),
@@ -52,10 +49,49 @@ def _build_plan(state: WorldState, optimizer: RouteOptimizer,
     return solution.dropped, new_plan
 
 
+def _build_plan(state: WorldState, optimizer: RouteOptimizer,
+                depot_id: str = "DEPOT",
+                customer_ids=None) -> Tuple[List[str], Dict[str, VehicleRoute]]:
+    problem = build_routing_problem(state, depot_id, customer_ids=customer_ids)
+    solution = optimizer.solve(problem)
+    return _build_plan_from_solution(state, solution, depot_id)
+
+
 def plan_routes(state: WorldState, optimizer: RouteOptimizer,
                 depot_id: str = "DEPOT") -> List[str]:
     dropped, state.plan = _build_plan(state, optimizer, depot_id)
     return dropped
+
+
+def _idle_vehicle_ids(state: WorldState) -> list:
+    """Vehicles available to take a new wave: parked at a depot with no route, or
+    one whose every stop is already delivered (finished a prior wave)."""
+    from fleet.contracts.state import VehicleStatus
+    out = []
+    for v in state.vehicles.values():
+        if v.status != VehicleStatus.AT_DEPOT:
+            continue
+        vr = state.plan.get(v.id)
+        if vr is None or not vr.stops or all(s.actual_arrival is not None for s in vr.stops):
+            out.append(v.id)
+    return out
+
+
+def plan_wave(state: WorldState, optimizer: RouteOptimizer,
+              customer_ids, depot_id: str = "DEPOT") -> List[str]:
+    """Plan a dispatch wave for the given inbox customers using only idle vehicles,
+    merging the result into state.plan so vehicles already running are untouched."""
+    from fleet.routing.matrix import build_routing_problem
+    idle = _idle_vehicle_ids(state)
+    if not idle:
+        return list(customer_ids)          # nothing free -> all deferred
+    problem = build_routing_problem(state, depot_id,
+                                    customer_ids=set(customer_ids),
+                                    vehicle_ids=set(idle))
+    solution = optimizer.solve(problem)
+    _dropped, new_plan = _build_plan_from_solution(state, solution, depot_id)
+    state.plan.update(new_plan)              # merge: busy vehicles' routes untouched
+    return solution.dropped
 
 
 def plan_total_minutes(state: WorldState) -> float:

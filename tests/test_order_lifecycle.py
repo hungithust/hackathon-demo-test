@@ -44,3 +44,29 @@ def test_reroute_respects_customer_filter():
     reroute(state, _optimizer(), customer_ids={"C001", "C002"})
     planned = {s.customer_id for vr in state.plan.values() for s in vr.stops}
     assert planned <= {"C001", "C002"}
+
+
+from fleet.routing.planner import plan_wave, plan_routes
+from fleet.contracts.state import VehicleStatus
+
+
+def test_plan_wave_only_plans_selected_customers():
+    state = build_sample_state()
+    plan_wave(state, _optimizer(), {"C001"})
+    planned = {s.customer_id for vr in state.plan.values() for s in vr.stops}
+    assert planned == {"C001"}
+
+
+def test_plan_wave_merges_without_touching_busy_vehicles():
+    state = build_sample_state()
+    # Wave 1: dispatch C001 -> some vehicle gets a route.
+    plan_wave(state, _optimizer(), {"C001"})
+    busy_vid = next(vid for vid, vr in state.plan.items() if vr.stops)
+    # Simulate the vehicle being out on the road (busy, not idle).
+    state.vehicles[busy_vid].status = VehicleStatus.ON_ROUTE
+    busy_route_before = state.plan[busy_vid]
+    # Wave 2: dispatch C002 -> must use a DIFFERENT (idle) vehicle.
+    plan_wave(state, _optimizer(), {"C002"})
+    assert state.plan[busy_vid] is busy_route_before, "busy vehicle's route was replaced"
+    planned = {s.customer_id for vr in state.plan.values() for s in vr.stops}
+    assert {"C001", "C002"} <= planned
