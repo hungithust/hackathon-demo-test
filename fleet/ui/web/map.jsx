@@ -335,7 +335,7 @@ function DispatchMap({ state, speed = 2, selectedVeh, onSelectVeh, selectedEvent
             <g key={c.id} transform={`translate(${p.x},${p.y})`}
                className={isSel ? "cust-marker sel" : "cust-marker"}
                onMouseEnter={() => setTip({ id: c.id + " · " + c.name, color: fillColor,
-                 rows: [["Type", c.type], ["Status", isDone ? "Delivered ✓" : "Pending orders"], ["Open orders", c.orders]] })}
+                 rows: [["Type", c.type], ["Status", isDone ? "Delivered" : "Awaiting dispatch"]] })}
                onMouseLeave={() => setTip(null)} style={{ cursor: "pointer", opacity: 1.0 }}>
               {isSel && <circle r={pr.r + 10} fill="none" stroke="#60a5fa" strokeWidth="2.5" opacity="0.9"/>}
               <circle r={pr.r + 4} fill={fillColor} opacity={isDone ? ".25" : ".14"}/>
@@ -366,7 +366,7 @@ function DispatchMap({ state, speed = 2, selectedVeh, onSelectVeh, selectedEvent
         {depots.map((d) => PNODES[d.id] && (
           <g key={d.id} transform={`translate(${PNODES[d.id].x},${PNODES[d.id].y})`}
              onMouseEnter={() => setTip({ id: d.id + " · " + d.name, color: "#F5C451",
-               rows: [["Role", "Warehouse"], ["Open orders", state.pending_orders]] })}
+               rows: [["Role", "Warehouse"]] })}
              onMouseLeave={() => setTip(null)} style={{ cursor: "pointer" }}>
             <circle r="34" fill="url(#depotGlow)"/>
             <rect x="-10" y="-10" width="20" height="20" rx="4" transform="rotate(45)" fill="#F5C451" stroke="#ffffff" strokeWidth="1.6"/>

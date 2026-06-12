@@ -10,6 +10,7 @@ function App() {
   const [speed, setSpeed] = React.useState(2);
   const [busy, setBusy] = React.useState(false);
   const [loading, setLoading] = React.useState({ active: true, label: "Loading control room", kind: "initial" });
+  const [visualLoading, setVisualLoading] = React.useState({ active: true, label: "Loading control room", kind: "initial" });
   const [selectedVeh, setSelectedVeh] = React.useState(null);
   const [selectedEvent, setSelectedEvent] = React.useState(null);
   const [selectedDecision, setSelectedDecision] = React.useState(null);
@@ -18,6 +19,9 @@ function App() {
   const [dayLogOpen, setDayLogOpen] = React.useState(false);
   const tick = React.useRef(null);
   const inflight = React.useRef(false);
+  const visualLoadingRef = React.useRef(visualLoading);
+  const visualShownAt = React.useRef(Date.now());
+  const visualTimer = React.useRef(null);
 
   // Serialize every backend call. All mutations hit the same shared session, so a
   // Play-loop step must never overlap an approve/report — otherwise a stale step
@@ -32,6 +36,39 @@ function App() {
 
   // apply a fresh snapshot, flagging newly-arrived items so they flash once
   const apply = (next) => setState((prev) => markNew(prev, next));
+
+  // Keep the UI calm: requests can finish in a few ms, especially Play ticks.
+  // Only show visual loading after a short delay, and once shown keep it visible
+  // briefly so the header/map do not flicker between fast snapshots.
+  React.useEffect(() => {
+    clearTimeout(visualTimer.current);
+    const setVisual = (next) => {
+      visualLoadingRef.current = next;
+      setVisualLoading(next);
+    };
+
+    if (loading.active) {
+      const alreadyVisible = visualLoadingRef.current.active;
+      const delay = alreadyVisible ? 0 : (loading.kind === "tick" ? 320 : 180);
+      visualTimer.current = setTimeout(() => {
+        visualShownAt.current = Date.now();
+        setVisual(loading);
+      }, loading.kind === "initial" ? 0 : delay);
+      return () => clearTimeout(visualTimer.current);
+    }
+
+    if (!visualLoadingRef.current.active) {
+      setVisual({ active: false, label: "", kind: "" });
+      return undefined;
+    }
+
+    const minVisibleMs = visualLoadingRef.current.kind === "initial" ? 250 : 360;
+    const wait = Math.max(0, minVisibleMs - (Date.now() - visualShownAt.current));
+    visualTimer.current = setTimeout(() => {
+      setVisual({ active: false, label: "", kind: "" });
+    }, wait);
+    return () => clearTimeout(visualTimer.current);
+  }, [loading.active, loading.label, loading.kind]);
 
   // initial load from the live backend
   React.useEffect(() => {
@@ -146,7 +183,7 @@ function App() {
   };
 
   return (
-    <div className={"app" + (loading.active ? " is-loading" : "")}>
+    <div className={"app" + (visualLoading.active ? " is-loading" : "")}>
       <header className="header">
         <div className="brand">
           <div className="brand-mark"><Icon name="truck" size={20} sw={1.6}/></div>
@@ -157,7 +194,7 @@ function App() {
           <div style={{ marginLeft: 14 }} className={"live-dot" + (playing ? "" : " paused")}>
             <i></i>{playing ? "Live" : "Paused"}
           </div>
-          <LoadingIndicator loading={loading}/>
+          <LoadingIndicator loading={visualLoading}/>
         </div>
         <KPIBar state={state}/>
         <button className="btn ghost" onClick={() => setDayLogOpen(true)} title="Open day log">
@@ -196,7 +233,7 @@ function App() {
               selectedOrder={selectedOrder}
               selectedDecision={selectedDecision}
             />
-            <MapLoadingOverlay loading={loading}/>
+            <MapLoadingOverlay loading={visualLoading}/>
           </div>
           <FleetStrip state={state} selectedVeh={selectedVeh} onSelectVeh={selectVehicle}/>
         </section>

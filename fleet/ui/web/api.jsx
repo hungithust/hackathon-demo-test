@@ -90,8 +90,6 @@ const Api = {
   saveSettings: async (values) => normalize(await jpost("/api/settings", { values })),
 };
 
-function pendingOrders(state) { return state.pending_orders; }
-
 // Flag ids absent from the previous snapshot so they flash once (the design used
 // a server-side `_new`; with a real backend we diff client-side instead).
 function markNew(prev, next) {
@@ -109,5 +107,5 @@ function markNew(prev, next) {
 }
 
 Object.assign(window, {
-  DELAY_THRESHOLD, VOICE_EXAMPLES, Api, pendingOrders, markNew, emptyState,
+  DELAY_THRESHOLD, VOICE_EXAMPLES, Api, markNew, emptyState,
 });

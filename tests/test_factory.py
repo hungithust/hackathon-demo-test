@@ -126,12 +126,12 @@ def test_factory_nim_without_endpoint_falls_back_to_rule():
     assert isinstance(build_components(s).decision_engine, RuleBasedEngine)
 
 
-def test_build_transcriber_defaults_to_null():
+def test_build_transcriber_defaults_to_riva():
     from config.settings import load_settings
     from fleet.factory import build_transcriber
-    from fleet.intake.asr import NullTranscriber
+    from fleet.intake.asr import RivaTranscriber
     t = build_transcriber(load_settings({}))
-    assert isinstance(t, NullTranscriber)
+    assert isinstance(t, RivaTranscriber)
 
 
 def test_build_transcriber_selects_whisper():

@@ -120,8 +120,8 @@ def build_components(settings) -> Components:
 
 
 def build_transcriber(settings):
-    """Select the ASR impl. Defaults to NullTranscriber (text-only) so the
-    feature is OFF unless ASR_ENGINE is set."""
+    """Select the ASR impl. Riva is the normal default; set ASR_ENGINE=none for
+    text-only demos."""
     if settings.asr_engine == "whisper":
         return WhisperTranscriber(settings)
     if settings.asr_engine == "riva" and getattr(settings, "riva_endpoint", ""):

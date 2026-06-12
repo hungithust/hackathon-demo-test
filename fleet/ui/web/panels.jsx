@@ -22,11 +22,15 @@ function routePreview(nodes) {
 }
 
 function LoadingIndicator({ loading }) {
-  if (!loading || !loading.active) return null;
+  const active = loading && loading.active;
   return (
-    <div className={"loading-pill " + (loading.kind || "")}>
-      <span className="mini-spinner"></span>
-      <span>{loading.label || "Working"}</span>
+    <div className={"loading-slot" + (active ? " on" : "")} aria-live="polite">
+      {active && (
+        <div className={"loading-pill " + (loading.kind || "")}>
+          <span className="mini-spinner"></span>
+          <span>{loading.label || "Working"}</span>
+        </div>
+      )}
     </div>
   );
 }
@@ -57,8 +61,8 @@ function KPIBar({ state }) {
         <div className="k-val mono">{fmtClock(state.clock)}<span className="k-unit">{fmtDate(state.clock)}</span></div>
       </div>
       <div className="kpi">
-        <div className="k-label">Pending Orders</div>
-        <div className="k-val mono">{pendingOrders(state)}</div>
+        <div className="k-label">Active Events</div>
+        <div className="k-val mono">{state.events.length}</div>
       </div>
       <div className={"kpi" + (pending > 0 ? " alert pulse" : "")}>
         <div className="k-label">Awaiting Approval</div>
@@ -590,7 +594,7 @@ function InboxPanel({ state, onDispatch, selectedOrder, onSelectOrder, embedded 
       <div className="panel-body pad">
         {rows.length === 0 ? (
           <div className="empty"><div className="e-ico"><Icon name="check" size={22}/></div>
-            <div className="e-title">No pending orders</div>
+            <div className="e-title">Inbox is clear</div>
             <div className="e-sub">All available orders have been dispatched.</div></div>
         ) : rows.map((r) => (
           <label key={r.customer_id} className={"order-row" + (sel.has(r.customer_id) || selectedOrder === r.customer_id ? " sel" : "")}
@@ -727,7 +731,7 @@ function SystemSummary({ state }) {
       </div>
       <div className="detail-grid">
         <Metric label="Active events" value={state.events.length}/>
-        <Metric label="Pending orders" value={state.pending_orders}/>
+        <Metric label="In progress" value={(state.ordersInProgress || []).length}/>
         <Metric label="Vehicles" value={state.vehicles.length}/>
         <Metric label="Auto actions" value={auto}/>
       </div>
