@@ -20,7 +20,7 @@ function MapTip({ tip, mouse }) {
 const RIVER = "M1020,300 C820,360 760,470 700,560 C660,620 720,700 560,720 L1080,720 Z";
 const SPEED_MS = { 1: 2000, 2: 1100, 4: 600 };
 
-function DispatchMap({ state, speed = 2, selectedVeh, onSelectVeh, selectedEvent, selectedOrder }) {
+function DispatchMap({ state, speed = 2, selectedVeh, onSelectVeh, selectedEvent, selectedOrder, selectedDecision }) {
   const [tip, setTip] = React.useState(null);
   const [mouse, setMouse] = React.useState({ x: 0, y: 0 });
   const [view, setView] = React.useState({ k: 1, x: 0, y: 0 }); // zoom/pan transform
@@ -280,13 +280,14 @@ function DispatchMap({ state, speed = 2, selectedVeh, onSelectVeh, selectedEvent
         {/* proposed vehicle routes (dashed green preview for pending reroute decisions) */}
         {(state.decisions || []).map((d) => {
            if (!d.proposed_paths) return null;
+           const selected = !selectedDecision || selectedDecision === d.id;
            return Object.entries(d.proposed_paths).map(([vid, path]) => {
                if (!path || path.length < 2) return null;
                const pathD = pathStr(path);
                return (
                  <g key={`prop-${d.id}-${vid}`}>
-                   <path d={pathD} stroke="#22c55e" strokeWidth="6" strokeDasharray="10,7" fill="none" opacity="0.35"/>
-                   <path d={pathD} stroke="#4ade80" strokeWidth="2.5" strokeDasharray="10,7" fill="none" opacity="0.9" className="route-flow"/>
+                   <path d={pathD} stroke="#22c55e" strokeWidth={selected ? "7" : "5"} strokeDasharray="10,7" fill="none" opacity={selected ? "0.4" : "0.16"}/>
+                   <path d={pathD} stroke="#4ade80" strokeWidth={selected ? "3" : "2"} strokeDasharray="10,7" fill="none" opacity={selected ? "0.95" : "0.38"} className="route-flow"/>
                  </g>
                );
            });
@@ -352,7 +353,7 @@ function DispatchMap({ state, speed = 2, selectedVeh, onSelectVeh, selectedEvent
           return (
             <g key={w.id} transform={`translate(${p.x},${p.y})`}
                onMouseEnter={() => setTip({ id: w.id + " · " + (w.name || "Detour point"), color: "#A855F7",
-                 rows: [["Role", "Detour waypoint"], ["Note", "đường vòng né jam/ngập"]] })}
+                 rows: [["Role", "Detour waypoint"], ["Note", "Bypass around congestion or flooding"]] })}
                onMouseLeave={() => setTip(null)} style={{ cursor: "pointer" }}>
               <circle r="10" fill="#A855F7" opacity=".18"/>
               <rect x="-5.5" y="-5.5" width="11" height="11" rx="2" transform="rotate(45)" fill="#A855F7" stroke="#ffffff" strokeWidth="1.5"/>

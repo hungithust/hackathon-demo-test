@@ -57,8 +57,8 @@ class Settings:
     oracle_min_gap: float = 1.0           # M-B(SBv2): min best/worst realized-cost gap to keep an example (else no signal)
     nim_endpoint: str = "http://localhost:8002/v1"                # M-C(SBv2): OpenAI-compatible NIM endpoint (empty -> NimAgent disabled)
     nim_model: str = "sovereign-brain"  # M-C(SBv2): served NIM model id
-    asr_engine: str = "none"          # intake: none | whisper | riva
-    riva_endpoint: str = ""           # intake: Riva ASR NIM endpoint
+    asr_engine: str = "riva"          # intake: none | whisper | riva
+    riva_endpoint: str = "localhost:50051"           # intake: Riva ASR NIM endpoint
     whisper_model: str = "large-v3"   # intake: faster-whisper model id
     intake_extractor: str = "nim"     # intake: nim | claude (extractor transport)
     world: str = "sample"                        # world builder: sample | multidepot | real

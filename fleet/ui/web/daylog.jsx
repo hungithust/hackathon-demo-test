@@ -40,7 +40,7 @@ function DayLogOverlay({ open, onClose }) {
       <div className="modal daylog" style={{ width: "92vw", height: "88vh", display: "flex" }}
         onClick={(e) => e.stopPropagation()}>
         <div style={{ width: 360, overflowY: "auto", borderRight: "1px solid var(--border)" }}>
-          <div className="panel-head"><h2>Nhật ký ngày</h2>
+          <div className="panel-head"><h2>Day Log</h2>
             <button className="btn ghost icon" style={{ marginLeft: "auto" }} onClick={onClose}><Icon name="x" size={15}/></button>
           </div>
           {items.map((it, i) => {
@@ -54,7 +54,7 @@ function DayLogOverlay({ open, onClose }) {
                 style={{ "--ev-accent": col }} onClick={() => setSel(i)}>
                 <div className="ev-main">
                   <div className="ev-top">
-                    <span className="ev-type">{isEv ? "● Sự kiện" : "→ Quyết định"}: {label}</span>
+                    <span className="ev-type">{isEv ? "Event" : "Decision"}: {label}</span>
                   </div>
                   <div className="ev-meta">
                     <span className="ev-target">{isEv ? r.target : (r.event_id || "—")}</span>
@@ -64,11 +64,11 @@ function DayLogOverlay({ open, onClose }) {
               </div>
             );
           })}
-          {items.length === 0 && <div className="empty"><div className="e-sub">Chưa có sự kiện nào trong ngày.</div></div>}
+          {items.length === 0 && <div className="empty"><div className="e-sub">No events have been logged today.</div></div>}
         </div>
         <div style={{ flex: 1, position: "relative" }}>
           {mapState ? <DispatchMap state={mapState} speed={1}/>
-                    : <div className="empty" style={{ marginTop: 80 }}><div className="e-sub">Chọn một mốc thời gian để xem bản đồ.</div></div>}
+                    : <div className="empty" style={{ marginTop: 80 }}><div className="e-sub">Select a timeline moment to inspect the map.</div></div>}
         </div>
       </div>
     </div>

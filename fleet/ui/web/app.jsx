@@ -9,11 +9,11 @@ function App() {
   const [playing, setPlaying] = React.useState(false);
   const [speed, setSpeed] = React.useState(2);
   const [busy, setBusy] = React.useState(false);
+  const [loading, setLoading] = React.useState({ active: true, label: "Loading control room", kind: "initial" });
   const [selectedVeh, setSelectedVeh] = React.useState(null);
   const [selectedEvent, setSelectedEvent] = React.useState(null);
-  const [queueView, setQueueView] = React.useState("pending");
+  const [selectedDecision, setSelectedDecision] = React.useState(null);
   const [settingsOpen, setSettingsOpen] = React.useState(false);
-  const [leftTab, setLeftTab] = React.useState("events"); // events | inbox | progress
   const [selectedOrder, setSelectedOrder] = React.useState(null);
   const [dayLogOpen, setDayLogOpen] = React.useState(false);
   const tick = React.useRef(null);
@@ -34,7 +34,13 @@ function App() {
   const apply = (next) => setState((prev) => markNew(prev, next));
 
   // initial load from the live backend
-  React.useEffect(() => { Api.snapshot().then(apply).catch((e) => console.error(e)); }, []);
+  React.useEffect(() => {
+    setLoading({ active: true, label: "Loading control room", kind: "initial" });
+    Api.snapshot()
+      .then(apply)
+      .catch((e) => console.error(e))
+      .finally(() => setLoading({ active: false, label: "", kind: "" }));
+  }, []);
 
   // clear "_new" flags shortly after a render so animations only play once
   React.useEffect(() => {
@@ -56,39 +62,91 @@ function App() {
     if (!playing) { clearInterval(tick.current); return; }
     tick.current = setInterval(async () => {
       if (inflight.current) return;   // skip this tick; something else is running
+      setLoading({ active: true, label: "Advancing simulation", kind: "tick" });
       try { apply(await runExclusive(() => Api.step(1))); } catch (e) { console.error(e); }
+      finally { setLoading({ active: false, label: "", kind: "" }); }
     }, SPEED_MS[speed] || 1100);
     return () => clearInterval(tick.current);
   }, [playing, speed]);
 
-  const guard = async (fn) => {
+  const guard = async (fn, label = "Working") => {
     if (busy) return;
     setBusy(true);
-    try { apply(await runExclusive(fn)); } catch (e) { console.error(e); } finally { setBusy(false); }
+    setLoading({ active: true, label, kind: "action" });
+    try { apply(await runExclusive(fn)); } catch (e) { console.error(e); }
+    finally {
+      setBusy(false);
+      setLoading({ active: false, label: "", kind: "" });
+    }
   };
 
-  const doStep = (n) => guard(() => Api.step(n));
-  const doReset = () => { setPlaying(false); setSelectedVeh(null); setSelectedEvent(null); guard(() => Api.reset()); };
-  const onApprove = (id) => guard(() => Api.approve(id));
-  const onReject = (id) => guard(() => Api.reject(id));
-  const onDispatch = (body) => guard(() => Api.dispatch(body));
+  const doStep = (n) => guard(() => Api.step(n), n === 1 ? "Advancing 1 tick" : `Advancing ${n} ticks`);
+  const clearSelection = () => {
+    setSelectedVeh(null);
+    setSelectedEvent(null);
+    setSelectedDecision(null);
+    setSelectedOrder(null);
+  };
+  const selectVehicle = (id) => {
+    setSelectedVeh((cur) => cur === id ? null : id);
+    setSelectedEvent(null);
+    setSelectedDecision(null);
+    setSelectedOrder(null);
+  };
+  const selectEvent = (id) => {
+    setSelectedEvent((cur) => cur === id ? null : id);
+    setSelectedVeh(null);
+    setSelectedDecision(null);
+    setSelectedOrder(null);
+  };
+  const selectDecision = (id) => {
+    setSelectedDecision((cur) => cur === id ? null : id);
+    setSelectedEvent(null);
+    setSelectedVeh(null);
+    setSelectedOrder(null);
+  };
+  const selectOrder = (id) => {
+    setSelectedOrder((cur) => cur === id ? null : id);
+    setSelectedDecision(null);
+    setSelectedEvent(null);
+    setSelectedVeh(null);
+  };
+
+  const doReset = () => { setPlaying(false); clearSelection(); guard(() => Api.reset(), "Resetting world"); };
+  const onApprove = (id) => guard(async () => { const snap = await Api.approve(id); setSelectedDecision(null); return snap; }, "Applying recommendation");
+  const onReject = (id) => guard(async () => { const snap = await Api.reject(id); setSelectedDecision(null); return snap; }, "Rejecting recommendation");
+  const onDispatch = (body) => guard(() => Api.dispatch(body), "Dispatching orders");
 
   const onReport = async (raw) => {
-    const res = await runExclusive(() => Api.report(raw));
-    apply(res.state);
-    if (res.decisions && res.decisions.length) setQueueView("pending");
-    return res; // { raw, reports, decisions, state }
+    setBusy(true);
+    setLoading({ active: true, label: "Parsing field report", kind: "action" });
+    try {
+      const res = await runExclusive(() => Api.report(raw));
+      apply(res.state);
+      if (res.decisions && res.decisions.length) setSelectedDecision(res.decisions[0].id);
+      return res; // { raw, reports, decisions, state }
+    } finally {
+      setBusy(false);
+      setLoading({ active: false, label: "", kind: "" });
+    }
   };
 
   const onReportAudio = async (blob) => {
-    const res = await runExclusive(() => Api.reportAudio(blob));
-    apply(res.state);
-    if (res.decisions && res.decisions.length) setQueueView("pending");
-    return res;
+    setBusy(true);
+    setLoading({ active: true, label: "Transcribing field report", kind: "action" });
+    try {
+      const res = await runExclusive(() => Api.reportAudio(blob));
+      apply(res.state);
+      if (res.decisions && res.decisions.length) setSelectedDecision(res.decisions[0].id);
+      return res;
+    } finally {
+      setBusy(false);
+      setLoading({ active: false, label: "", kind: "" });
+    }
   };
 
   return (
-    <div className="app">
+    <div className={"app" + (loading.active ? " is-loading" : "")}>
       <header className="header">
         <div className="brand">
           <div className="brand-mark"><Icon name="truck" size={20} sw={1.6}/></div>
@@ -99,40 +157,65 @@ function App() {
           <div style={{ marginLeft: 14 }} className={"live-dot" + (playing ? "" : " paused")}>
             <i></i>{playing ? "Live" : "Paused"}
           </div>
+          <LoadingIndicator loading={loading}/>
         </div>
         <KPIBar state={state}/>
-        <button className="btn ghost" onClick={() => setDayLogOpen(true)} title="Nhật ký ngày">
-          <Icon name="clock" size={15}/> Nhật ký ngày
+        <button className="btn ghost" onClick={() => setDayLogOpen(true)} title="Open day log">
+          <Icon name="clock" size={15}/> Day Log
         </button>
         <SimControls playing={playing} speed={speed}
           onPlay={() => setPlaying((p) => !p)} onStep={doStep} onReset={doReset} onSpeed={setSpeed}
-          onOpenSettings={() => setSettingsOpen(true)}/>
+          onOpenSettings={() => setSettingsOpen(true)} busy={busy || loading.kind === "initial"}/>
       </header>
 
-      <div className="workspace">
-        <div className="col">
-          <div className="toggle-tabs" style={{ margin: "0 0 8px" }}>
-            <button className={leftTab === "events" ? "on" : ""} onClick={() => setLeftTab("events")}>Sự kiện</button>
-            <button className={leftTab === "inbox" ? "on" : ""} onClick={() => setLeftTab("inbox")}>Đơn tới <span className="count">{state.inbox.length}</span></button>
-            <button className={leftTab === "progress" ? "on" : ""} onClick={() => setLeftTab("progress")}>Tiến trình</button>
-          </div>
-          {leftTab === "events" && <EventList state={state} selected={selectedEvent} onSelect={setSelectedEvent}/>}
-          {leftTab === "inbox" && <InboxPanel state={state} onDispatch={onDispatch}/>}
-          {leftTab === "progress" && <ProgressPanel state={state} selectedVeh={selectedVeh} selectedOrder={selectedOrder} onSelectOrder={setSelectedOrder}/>}
-        </div>
+      <main className="ops-layout">
+        <aside className="queue-rail">
+          <OperationsQueue
+            state={state}
+            selectedDecision={selectedDecision}
+            selectedEvent={selectedEvent}
+            selectedOrder={selectedOrder}
+            selectedVeh={selectedVeh}
+            onSelectDecision={selectDecision}
+            onSelectEvent={selectEvent}
+            onSelectOrder={selectOrder}
+            onSelectVeh={selectVehicle}
+            onDispatch={onDispatch}
+            busy={busy}
+          />
+        </aside>
 
-        <div className="col col-center">
-          <div className="panel" style={{ flex: 1, padding: 0, overflow: "hidden" }}>
-            <DispatchMap state={state} speed={speed} selectedVeh={selectedVeh} onSelectVeh={setSelectedVeh} selectedEvent={selectedEvent} selectedOrder={selectedOrder}/>
+        <section className="map-workspace">
+          <div className="map-shell panel">
+            <DispatchMap
+              state={state}
+              speed={speed}
+              selectedVeh={selectedVeh}
+              onSelectVeh={selectVehicle}
+              selectedEvent={selectedEvent}
+              selectedOrder={selectedOrder}
+              selectedDecision={selectedDecision}
+            />
+            <MapLoadingOverlay loading={loading}/>
           </div>
-          <FleetStrip state={state} selectedVeh={selectedVeh} onSelectVeh={setSelectedVeh}/>
-        </div>
+          <FleetStrip state={state} selectedVeh={selectedVeh} onSelectVeh={selectVehicle}/>
+        </section>
 
-        <div className="col">
-          <ApprovalQueue state={state} onApprove={onApprove} onReject={onReject} view={queueView} setView={setQueueView}/>
-          <VoicePanel onReport={onReport} onReportAudio={onReportAudio} clock={state.clock}/>
-        </div>
-      </div>
+        <aside className="context-rail">
+          <ContextDrawer
+            state={state}
+            selectedVeh={selectedVeh}
+            selectedEvent={selectedEvent}
+            selectedDecision={selectedDecision}
+            selectedOrder={selectedOrder}
+            onApprove={onApprove}
+            onReject={onReject}
+            onClear={clearSelection}
+            busy={busy}
+          />
+          <VoicePanel onReport={onReport} onReportAudio={onReportAudio} clock={state.clock} busy={busy}/>
+        </aside>
+      </main>
       <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)}
         onApplied={(snap) => { setPlaying(false); apply(snap); }}/>
       <DayLogOverlay open={dayLogOpen} onClose={() => setDayLogOpen(false)}/>
